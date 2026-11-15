@@ -181,7 +181,7 @@ async def get_or_create_proxy_webhook(
     except discord.Forbidden as exc:
         raise ProxyError(
             "Bot に「ウェブフックの管理 (Manage Webhooks)」権限がないため、"
-            "Webhook を作成できません。"
+            "Webhook を作成できなかったゾ。管理者に報告してくれよな～頼むよ～"
         ) from exc
 
 
@@ -214,13 +214,13 @@ class ConfirmDeleteView(discord.ui.View):
         self.target_message = target_message
         self.author_id = author_id
 
-    @discord.ui.button(label="削除する", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="はい、ヨロシクぅ！", style=discord.ButtonStyle.danger)
     async def confirm_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         if interaction.user.id != self.author_id:
             await interaction.response.send_message(
-                "この操作は送信者本人のみ実行できます。", ephemeral=True
+                "あっおい待てい（江戸っ子）、本人以外は削除できないゾ", ephemeral=True
             )
             return
 
@@ -231,25 +231,25 @@ class ConfirmDeleteView(discord.ui.View):
             await delete_webhook_message(self.target_message, bot_user_id)
         except discord.NotFound:
             await interaction.edit_original_response(
-                content="メッセージはすでに削除されています。", view=None
+                content="メッセージはすでに削除されてるゾ。", view=None
             )
         except (discord.Forbidden, discord.HTTPException):
             await interaction.edit_original_response(
-                content="メッセージの削除に失敗しました（Bot の権限を確認してください）。",
+                content="メッセージの削除ができなかっ...たぁ!（Bot の権限を確認してください）。",
                 view=None,
             )
         else:
             await interaction.edit_original_response(
-                content="メッセージを削除しました。", view=None
+                content="メッセージを消し飛ばしたゾ", view=None
             )
         self.stop()
 
-    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="やっぱやめとく", style=discord.ButtonStyle.secondary)
     async def cancel_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         await interaction.response.edit_message(
-            content="削除をキャンセルしました。", view=None
+            content="キャンセルしたゾ", view=None
         )
         self.stop()
 
@@ -284,14 +284,14 @@ class ProxyDeleteButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.author_id:
             await interaction.response.send_message(
-                "このメッセージを削除できるのは送信者本人のみです。",
+                "あっおい待てい（江戸っ子）、本人以外は削除できないゾ",
                 ephemeral=True,
             )
             return
 
         if interaction.message is None:
             await interaction.response.send_message(
-                "削除対象のメッセージを取得できませんでした。",
+                "削除対象のメッセージが読み込めなかったゾ...",
                 ephemeral=True,
             )
             return
@@ -301,7 +301,7 @@ class ProxyDeleteButton(
             author_id=self.author_id,
         )
         await interaction.response.send_message(
-            "本当にこのメッセージを削除しますか？",
+            "メッセージ削除いいすかぁ？",
             view=view,
             ephemeral=True,
         )
@@ -325,12 +325,12 @@ class ProxyMessageModal(discord.ui.Modal, title="メッセージを送信"):
             custom_id="proxy:modal_mention_select",
             options=[
                 discord.SelectOption(
-                    label="メンション通知する（黄色ハイライトあり）",
+                    label="メンション通知する",
                     value="true",
                     default=True,
                 ),
                 discord.SelectOption(
-                    label="通知しない（メンション表示のみ・ハイライトなし）",
+                    label="メンション通知しない",
                     value="false",
                 ),
             ],
@@ -338,11 +338,11 @@ class ProxyMessageModal(discord.ui.Modal, title="メッセージを送信"):
     )
 
     message_input = discord.ui.Label(
-        text="メッセージ内容",
+        text="送信するメッセージを書き込み",
         component=discord.ui.TextInput(
             custom_id="proxy:modal_message_input",
             style=discord.TextStyle.paragraph,
-            placeholder="ここに送信したいメッセージを入力してください...",
+            placeholder="ナニガキモチーノ",
             required=True,
             max_length=2000,
         ),
@@ -401,9 +401,9 @@ class ProxyMessageModal(discord.ui.Modal, title="メッセージを送信"):
         except ProxyError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
         except discord.HTTPException as exc:
-            logger.warning("代替送信に失敗しました: %s", exc)
+            logger.warning("エラー！滅！！！！: %s", exc)
             await interaction.followup.send(
-                "メッセージの送信に失敗しました。時間をおいて再度お試しください。",
+                "送信ダメみたいですね（失敗）ちょっと待ってから送りなおしてくれよな～頼むよ～",
                 ephemeral=True,
             )
         else:
@@ -578,7 +578,7 @@ class ProxyCog(commands.Cog):
         """メッセージ右クリックで返信先をセット/トグル解除する。"""
         if interaction.guild is None or interaction.channel is None:
             await interaction.response.send_message(
-                "サーバー内のチャンネルでのみ利用できます。", ephemeral=True
+                "サーバー内のチャンネルでだけ利用できるからね。そして天は鳴き、大地は震えるだろうね", ephemeral=True
             )
             return
 
@@ -590,7 +590,7 @@ class ProxyCog(commands.Cog):
             # 同じメッセージに対して2回発火された場合はキャンセル
             del self._pending_replies[key]
             await interaction.response.send_message(
-                "返信先の指定を解除しました。",
+                "返信先の指定を解除したゾ。喜ぶん宿",
                 ephemeral=True,
             )
         else:
@@ -611,9 +611,9 @@ class ProxyCog(commands.Cog):
             if len(display_snippet) > 30:
                 display_snippet = display_snippet[:27] + "..."
             await interaction.response.send_message(
-                f"返信先をセットしました（次回 `/say` 送信時に引用されます）:\n"
+                f"返信先をセットしたゾ。オッスお願いしまーす（次回 `/say` 送信時に引用）:\n"
                 f"> **{display_author}**: {display_snippet}\n"
-                f"※ 同じメッセージで再度「返信先にセット」を実行すると解除できます。",
+                f"※ 同じメッセージで再度「返信先にセット」を実行すると解除できるゾ",
                 ephemeral=True,
             )
 
@@ -659,10 +659,10 @@ class ProxyCog(commands.Cog):
         """Webhook で代替メッセージを送信し、必要に応じて待機ボタンを再送信する。"""
         channel = interaction.channel
         if channel is None or interaction.guild is None:
-            raise ProxyError("この機能はサーバー内のチャンネルでのみ利用できます。")
+            raise ProxyError("この機能はサーバー内のチャンネルでだけ利用できるからね。そして天は鳴き、大地は震えるだろうね")
 
         if self.bot.user is None:
-            raise ProxyError("Bot の初期化が完了していません。")
+            raise ProxyError("Bot の初期化ができてないゾ。ちょっと歯ぁ当たんよ～")
 
         bot_user_id = self.bot.user.id
         async with self._get_lock(channel.id):
@@ -716,7 +716,7 @@ class ProxyCog(commands.Cog):
         channel = interaction.channel
         if channel is None:
             await interaction.response.send_message(
-                "チャンネル情報を取得できませんでした。", ephemeral=True
+                "チャンネル情報を取得できなかったゾ。お兄さん許して～", ephemeral=True
             )
             return
 
@@ -727,23 +727,23 @@ class ProxyCog(commands.Cog):
                 await self.post_launcher(channel)
         except (discord.Forbidden, discord.HTTPException):
             await interaction.followup.send(
-                "送信開始メッセージの設置に失敗しました（Bot のメッセージ送信権限を確認してください）。",
+                "送信開始メッセージの設置に失敗たゾ。（権限不足の可能性）濃いすか？",
                 ephemeral=True,
             )
             return
 
         await interaction.followup.send(
-            "代替送信パネルを設置しました。", ephemeral=True
+            "代替送信パネル、工事完了です...", ephemeral=True
         )
 
     @app_commands.command(
         name="say",
-        description="あなたの表示名・アイコンでメッセージを直接送信します",
+        description="メッセージをボットが代わりに送信するゾ",
     )
     @app_commands.describe(
         message="送信するメッセージ内容",
         reply_to="返信先メッセージ（候補から選択、またはメッセージID）",
-        mention="返信時に相手へ通知・黄色ハイライトを付けるか（デフォルト: ON）",
+        mention="返信時に相手へ通知するか（デフォルト: ON）",
     )
     @app_commands.guild_only()
     async def say_proxy(
@@ -758,7 +758,7 @@ class ProxyCog(commands.Cog):
         guild = interaction.guild
         if channel is None or guild is None:
             await interaction.followup.send(
-                "サーバー内のチャンネルでのみ利用できます。", ephemeral=True
+                "サーバー内のチャンネルでだけ利用できるからね。そして天は鳴き、大地は震えるだろうね", ephemeral=True
             )
             return
 
@@ -805,7 +805,7 @@ class ProxyCog(commands.Cog):
         except discord.HTTPException as exc:
             logger.warning("直接代替送信に失敗しました: %s", exc)
             await interaction.followup.send(
-                "メッセージの送信に失敗しました。時間をおいて再度お試しください。",
+                "送信ダメみたいですね（失敗）ちょっと待ってから送りなおしてくれよな～頼むよ～",
                 ephemeral=True,
             )
         else:
