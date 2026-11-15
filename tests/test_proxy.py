@@ -410,11 +410,22 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
 
             key = (42, 999)
 
-            # 1回目: 返信先セット
+            # 1回目: 選択メニュー（ReplyActionChoiceView）が表示される
             await cog._context_menu_toggle_reply(interaction, msg1)
-            self.assertEqual(cog._pending_replies.get(key), (111, "テストメッセージ1"))
             interaction.response.send_message.assert_awaited_once()
-            self.assertIn("返信先をセットしたゾ", interaction.response.send_message.call_args.args[0])
+            choice_view = interaction.response.send_message.call_args.kwargs["view"]
+            self.assertEqual(type(choice_view).__name__, "ReplyActionChoiceView")
+
+            # 「返信先に設定する」ボタンを押す
+            set_interaction = MagicMock(spec=discord.Interaction)
+            set_interaction.channel = channel
+            set_interaction.user = SimpleNamespace(id=42)
+            set_interaction.response = MagicMock()
+            set_interaction.response.edit_message = AsyncMock()
+            await choice_view.set_reply_button.callback(set_interaction)
+            self.assertEqual(cog._pending_replies.get(key), (111, "テストメッセージ1"))
+            set_interaction.response.edit_message.assert_awaited_once()
+            self.assertIn("返信先をセットしたゾ", set_interaction.response.edit_message.call_args.kwargs["content"])
 
             # 2回目: 同じメッセージで発火 -> キャンセル
             interaction.response.send_message.reset_mock()
@@ -422,6 +433,41 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(key, cog._pending_replies)
             interaction.response.send_message.assert_awaited_once()
             self.assertIn("返信先の指定を解除したゾ", interaction.response.send_message.call_args.args[0])
+
+            # 3回目: 「直接返信する」ボタンを押すとモーダルへダイレクト遷移（メンション選択あり）
+            interaction.response.send_message.reset_mock()
+            await cog._context_menu_toggle_reply(interaction, msg1)
+            choice_view2 = interaction.response.send_message.call_args.kwargs["view"]
+
+            direct_interaction = MagicMock(spec=discord.Interaction)
+            direct_interaction.channel = channel
+            direct_interaction.user = SimpleNamespace(id=42)
+            direct_interaction.response = MagicMock()
+            direct_interaction.response.send_modal = AsyncMock()
+            await choice_view2.direct_reply_button.callback(direct_interaction)
+
+            self.assertEqual(cog._pending_replies.get(key), (111, "テストメッセージ1"))
+            direct_interaction.response.send_modal.assert_awaited_once()
+            reply_modal = direct_interaction.response.send_modal.call_args.args[0]
+            self.assertTrue(reply_modal.is_reply)
+            self.assertIsNotNone(reply_modal.mention_select)
+            self.assertEqual(len(reply_modal.children), 2)
+
+            # 非返信時の「ほらいくどー」ボタンではメンション選択が見えない
+            cog._pending_replies.pop(key, None)
+            from yajubot.cogs.proxy import ProxyLauncherView
+            launcher_view = ProxyLauncherView(cog)
+            open_interaction = MagicMock(spec=discord.Interaction)
+            open_interaction.channel = channel
+            open_interaction.user = SimpleNamespace(id=42)
+            open_interaction.message = MagicMock(spec=discord.Message)
+            open_interaction.response = MagicMock()
+            open_interaction.response.send_modal = AsyncMock()
+            await launcher_view.open_modal.callback(open_interaction)
+            normal_modal = open_interaction.response.send_modal.call_args.args[0]
+            self.assertFalse(normal_modal.is_reply)
+            self.assertIsNone(normal_modal.mention_select)
+            self.assertEqual(len(normal_modal.children), 1)
         finally:
             await bot.close()
 
@@ -480,6 +526,170 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("@返信相手", kwargs_off["content"])
         finally:
             await bot.close()
+
+    async def test_mark_reply_header_as_deleted(self) -> None:
+        from yajubot.cogs.proxy import mark_reply_header_as_deleted, extract_editable_content
+
+        text = "<:reply1:1571547845683712101><:reply2:1571547847264829490>@先輩 :[こんにちは](https://discord.com/channels/1/2/3)\n本文だよ"
+        # 一致するメッセージID
+        res, changed = mark_reply_header_as_deleted(text, 3)
+        self.assertTrue(changed)
+        self.assertEqual(res, "<:reply1:1571547845683712101><:reply2:1571547847264829490>削除されたメッセージ\n本文だよ")
+
+        # 異なるメッセージID
+        res2, changed2 = mark_reply_header_as_deleted(text, 999)
+        self.assertFalse(changed2)
+        self.assertEqual(res2, text)
+
+        # メンションID形式 (<@123>) のヘッダー
+        text_id = "<:reply1:1571547845683712101><:reply2:1571547847264829490><@987654321> :[こんにちは](https://discord.com/channels/1/2/3)\n本文だよ"
+        res_id, changed_id = mark_reply_header_as_deleted(text_id, 3)
+        self.assertTrue(changed_id)
+        self.assertEqual(res_id, "<:reply1:1571547845683712101><:reply2:1571547847264829490>削除されたメッセージ\n本文だよ")
+
+        # 編集用コンテンツ抽出
+        editable = extract_editable_content(text)
+        self.assertEqual(editable, "本文だよ")
+
+    async def test_on_raw_message_delete_updates_proxy_reply(self) -> None:
+        bot = YajuBot(BotConfig(token="dummy-token"))
+        try:
+            cog = ProxyCog(bot)
+            bot_user = SimpleNamespace(id=100)
+
+            channel = MagicMock(spec=discord.TextChannel)
+            channel.id = 555
+
+            proxy_msg = MagicMock(spec=discord.Message)
+            proxy_msg.id = 7001
+            proxy_msg.webhook_id = 999
+            proxy_msg.content = (
+                "<:reply1:1571547845683712101><:reply2:1571547847264829490>@先輩 :[削除されるやつ](https://discord.com/channels/1/2/888)\n返信本文"
+            )
+
+            other_msg = MagicMock(spec=discord.Message)
+            other_msg.id = 7002
+            other_msg.webhook_id = None
+            other_msg.content = "通常のメッセージ"
+
+            async def mock_history(limit=50):
+                yield proxy_msg
+                yield other_msg
+
+            channel.history = mock_history
+
+            webhook = MagicMock(spec=discord.Webhook)
+            webhook.edit_message = AsyncMock()
+
+            with (
+                patch.object(type(bot), "user", new=bot_user),
+                patch.object(type(bot), "get_channel", return_value=channel),
+                patch.dict(
+                    ProxyCog.__init__.__globals__,
+                    {"get_or_create_proxy_webhook": AsyncMock(return_value=webhook)},
+                ),
+            ):
+                payload = discord.RawMessageDeleteEvent(
+                    {"id": 888, "channel_id": 555, "guild_id": 1}
+                )
+                await cog.on_raw_message_delete(payload)
+
+                webhook.edit_message.assert_awaited_once()
+                kwargs = webhook.edit_message.call_args.kwargs
+                self.assertEqual(kwargs["message_id"], 7001)
+                self.assertIn("削除されたメッセージ", kwargs["content"])
+                self.assertNotIn("@先輩", kwargs["content"])
+        finally:
+            await bot.close()
+
+    async def test_context_menu_edit_proxy_and_modal_submit(self) -> None:
+        from yajubot.cogs.proxy import ProxyEditModal
+
+        bot = YajuBot(BotConfig(token="dummy-token"))
+        try:
+            cog = ProxyCog(bot)
+            bot_user = SimpleNamespace(id=100)
+
+            encoded_id = encode_proxy_author_id(42)
+            target_message = MagicMock(spec=discord.Message)
+            target_message.id = 1234
+            target_message.content = f"<:reply1:1571547845683712101><:reply2:1571547847264829490>@先輩 :[引用](url)\n編集前の本文{encoded_id}"
+
+            # 他人による編集試行（拒否される）
+            other_interaction = MagicMock(spec=discord.Interaction)
+            other_interaction.guild = MagicMock(spec=discord.Guild)
+            other_interaction.channel = MagicMock(spec=discord.TextChannel)
+            other_interaction.user = SimpleNamespace(id=999)
+            other_interaction.response = MagicMock()
+            other_interaction.response.send_message = AsyncMock()
+
+            await cog._context_menu_edit_proxy(other_interaction, target_message)
+            other_interaction.response.send_message.assert_awaited_once()
+            self.assertIn("本人以外は編集できないゾ", other_interaction.response.send_message.call_args.args[0])
+
+            # 本人による編集メニュー呼び出し（モーダルが開く）
+            author_interaction = MagicMock(spec=discord.Interaction)
+            author_interaction.guild = MagicMock(spec=discord.Guild)
+            author_interaction.channel = MagicMock(spec=discord.TextChannel)
+            author_interaction.user = SimpleNamespace(id=42)
+            author_interaction.response = MagicMock()
+            author_interaction.response.send_modal = AsyncMock()
+
+            await cog._context_menu_edit_proxy(author_interaction, target_message)
+            author_interaction.response.send_modal.assert_awaited_once()
+            modal = author_interaction.response.send_modal.call_args.args[0]
+            self.assertEqual(type(modal).__name__, "ProxyEditModal")
+            self.assertEqual(modal.message_input.default, "編集前の本文")
+
+            # モーダル送信（Webhook 編集の実行）
+            submit_interaction = MagicMock(spec=discord.Interaction)
+            submit_interaction.guild = MagicMock(spec=discord.Guild)
+            submit_interaction.guild.emojis = []
+            submit_interaction.channel = MagicMock(spec=discord.TextChannel)
+            submit_interaction.user = SimpleNamespace(id=42)
+            submit_interaction.response = MagicMock()
+            submit_interaction.response.defer = AsyncMock()
+            submit_interaction.followup = MagicMock()
+            submit_interaction.followup.send = AsyncMock()
+
+            modal.message_input._value = "編集後の新しい本文"
+
+            webhook = MagicMock(spec=discord.Webhook)
+            webhook.edit_message = AsyncMock()
+
+            with (
+                patch.object(type(bot), "user", new=bot_user),
+                patch.dict(
+                    ProxyCog.__init__.__globals__,
+                    {"get_or_create_proxy_webhook": AsyncMock(return_value=webhook)},
+                ),
+            ):
+                await modal.on_submit(submit_interaction)
+                webhook.edit_message.assert_awaited_once()
+                kwargs = webhook.edit_message.call_args.kwargs
+                self.assertEqual(kwargs["message_id"], 1234)
+                self.assertIn("編集後の新しい本文", kwargs["content"])
+                self.assertIn("reply1", kwargs["content"])  # 元の返信ヘッダーが保持されている
+                submit_interaction.followup.send.assert_awaited_once()
+                self.assertIn("メッセージを編集したゾ", submit_interaction.followup.send.call_args.args[0])
+        finally:
+            await bot.close()
+
+    async def test_ratelimit_error_handling(self) -> None:
+        from discord.errors import RateLimited, HTTPException
+        from yajubot.cogs.proxy import format_ratelimit_message, is_ratelimited_error
+
+        rl = RateLimited(4.5)
+        self.assertTrue(is_ratelimited_error(rl))
+        self.assertIn("あと 4.5 秒待ってからやり直してくれよな～頼むよ～", format_ratelimit_message(rl))
+
+        class MockResp:
+            status = 429
+            reason = "Too Many Requests"
+
+        http_429 = HTTPException(MockResp(), "You are being rate limited. retry_after: 3.2")
+        self.assertTrue(is_ratelimited_error(http_429))
+        self.assertIn("あと 3.2 秒待ってからやり直してくれよな～頼むよ～", format_ratelimit_message(http_429))
 
 
 if __name__ == "__main__":

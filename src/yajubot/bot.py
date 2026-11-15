@@ -62,9 +62,16 @@ class YajuCommandTree(app_commands.CommandTree):
 
         if isinstance(error, app_commands.CommandOnCooldown):
             message = (
-                f"このコマンドはクールダウン中です。"
-                f"あと {error.retry_after:.1f} 秒待ってから再試行してください。"
+                f"冷えてるか～？（レート制限） "
+                f"あと {error.retry_after:.1f} 秒待ってから再試行してくれよな～頼むよ～"
             )
+        elif isinstance(error, discord.RateLimited):
+            message = (
+                f"冷えてるか～？（レート制限） "
+                f"あと {error.retry_after:.1f} 秒待ってからやり直してくれよな～頼むよ～"
+            )
+        elif isinstance(error, discord.HTTPException) and getattr(error, "status", None) == 429:
+            message = "冷えてるか～？（レート制限） ちょっと時間をおいてからやり直してくれよな～頼むよ～"
         elif isinstance(error, app_commands.MissingPermissions):
             message = "このコマンドを実行するための権限がありません。"
         elif isinstance(error, app_commands.BotMissingPermissions):

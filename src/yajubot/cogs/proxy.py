@@ -74,10 +74,116 @@ def strip_reply_header(text: str) -> str:
     return text.strip()
 
 
+# 返信1行目のヘッダーパターン（削除検知および編集時のヘッダー保持用）
+REPLY_HEADER_PATTERN = re.compile(
+    r"(?P<emojis>(?:<:reply1:1571547845683712101>|:reply1:)(?:<:reply2:1571547847264829490>|:reply2:))"
+    r"(?P<summary>(?:@|<@!?\d+>).*?\s*:\s*\[.*?\])"
+    r"(?P<link>\((?P<url>https://discord\.com/channels/\d+/\d+/(?P<msg_id>\d+))\))?"
+)
+
+
+def extract_reply_header(text: str) -> str | None:
+    """メッセージ本文から1行目の返信ヘッダー（存在する場合）を取得する。"""
+    if not text:
+        return None
+    lines = text.split("\n")
+    if len(lines) > 1:
+        first_line = lines[0]
+        if REPLY1_EMOJI in first_line or ":reply1:" in first_line:
+            return first_line
+    return None
+
+
+def mark_reply_header_as_deleted(
+    text: str, deleted_message_id: int | None = None
+) -> tuple[str, bool]:
+    """返信ヘッダー内の「@ユーザー名 :[内容]」を「削除されたメッセージ」に置換する。
+
+    deleted_message_id が指定されている場合、一致したメッセージ ID 宛てのヘッダーのみ置換する。
+    置換が行われた場合は (新テキスト, True) を返す。
+    """
+    if not text:
+        return text, False
+    lines = text.split("\n")
+    if not lines:
+        return text, False
+    first_line = lines[0]
+    m = REPLY_HEADER_PATTERN.search(first_line)
+    if not m:
+        return text, False
+    if deleted_message_id is not None:
+        raw_msg_id = m.group("msg_id")
+        if raw_msg_id is not None and int(raw_msg_id) != deleted_message_id:
+            return text, False
+    new_first_line = REPLY_HEADER_PATTERN.sub(r"\g<emojis>削除されたメッセージ", first_line)
+    lines[0] = new_first_line
+    return "\n".join(lines), True
+
+
 # ゼロ幅文字を用いた不可視ユーザー ID エンコーディング（メッセージ本文に埋め込み）
 ZW_0 = "\u200b"
 ZW_1 = "\u200c"
 ZW_WRAP = "\u200d"
+INVISIBLE_META_PATTERN = re.compile(f"{ZW_WRAP}[{ZW_0}{ZW_1}]+{ZW_WRAP}")
+
+
+def strip_invisible_meta(text: str) -> str:
+    """テキストから不可視ゼロ幅メタデータを除去する。"""
+    if not text:
+        return ""
+    return INVISIBLE_META_PATTERN.sub("", text)
+
+
+def extract_editable_content(raw_content: str) -> str:
+    """編集用ポップアップのテキストフィールドに初期入力する本文を抽出する。
+
+    不可視メタデータおよび返信ヘッダー（存在する場合）を取り除いた純粋な本文を返す。
+    """
+    cleaned = strip_invisible_meta(raw_content)
+    lines = cleaned.split("\n")
+    if len(lines) > 1:
+        first_line = lines[0]
+        if REPLY1_EMOJI in first_line or ":reply1:" in first_line:
+            return "\n".join(lines[1:]).strip()
+    elif len(lines) == 1:
+        if REPLY1_EMOJI in lines[0] or ":reply1:" in lines[0]:
+            return ""
+    return cleaned.strip()
+
+
+def is_ratelimited_error(error: Exception) -> bool:
+    """発生した例外がレート制限（429 / RateLimited / CommandOnCooldown）であるかを判定する。"""
+    if isinstance(error, (discord.RateLimited, app_commands.CommandOnCooldown)):
+        return True
+    if isinstance(error, discord.HTTPException) and getattr(error, "status", None) == 429:
+        return True
+    return False
+
+
+def extract_retry_after(error: Exception) -> float | None:
+    """レート制限例外からリトライ可能秒数を抽出する。"""
+    if isinstance(error, (discord.RateLimited, app_commands.CommandOnCooldown)):
+        return getattr(error, "retry_after", None)
+    if isinstance(error, discord.HTTPException) and getattr(error, "status", None) == 429:
+        text = getattr(error, "text", "") or str(error)
+        m = re.search(r"retry[_-]?after.*?([0-9.]+)", text, re.IGNORECASE)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                pass
+    return None
+
+
+def format_ratelimit_message(
+    error: Exception | None = None, retry_after: float | None = None
+) -> str:
+    """レート制限発生時の案内メッセージを生成する。"""
+    if retry_after is None and error is not None:
+        retry_after = extract_retry_after(error)
+    if retry_after is not None and retry_after > 0:
+        return f"冷えてるか～？（レート制限） あと {retry_after:.1f} 秒待ってからやり直してくれよな～頼むよ～"
+    return "冷えてるか～？（レート制限） ちょっと時間をおいてからやり直してくれよな～頼むよ～"
 
 
 def encode_proxy_author_id(author_id: int) -> str:
@@ -314,59 +420,73 @@ class ConfirmDeleteView(discord.ui.View):
         self.stop()
 
 
-class ProxyMessageModal(discord.ui.Modal, title="メッセージを送信"):
+class ProxyMessageModal(discord.ui.Modal):
     """代替送信するメッセージ内容を入力するポップアップモーダル。"""
-
-    # メンション通知の入切セレクト
-    mention_select = discord.ui.Label(
-        text="返信時のメンション通知",
-        component=discord.ui.Select(
-            custom_id="proxy:modal_mention_select",
-            options=[
-                discord.SelectOption(
-                    label="メンション通知する",
-                    value="true",
-                    default=True,
-                ),
-                discord.SelectOption(
-                    label="メンション通知しない",
-                    value="false",
-                ),
-            ],
-        ),
-    )
-
-    message_input = discord.ui.Label(
-        text="送信するメッセージを書き込み",
-        component=discord.ui.TextInput(
-            custom_id="proxy:modal_message_input",
-            style=discord.TextStyle.paragraph,
-            placeholder="ナニガキモチーノ",
-            required=True,
-            max_length=2000,
-        ),
-    )
 
     def __init__(
         self,
         cog: ProxyCog,
         launcher_message: discord.Message | None,
+        *,
+        is_reply: bool = False,
+        reply_label: str | None = None,
     ) -> None:
-        super().__init__(timeout=300)
+        title = "返信メッセージを送信" if is_reply else "メッセージを送信"
+        super().__init__(title=title, timeout=300)
         self.cog = cog
         self.launcher_message = launcher_message
+        self.is_reply = is_reply
+
+        self.mention_select: discord.ui.Label[discord.ui.Select] | None = None
+        if is_reply:
+            # 返信時のみメンション通知の入切セレクトを表示
+            self.mention_select = discord.ui.Label(
+                text="返信時のメンション通知",
+                component=discord.ui.Select(
+                    custom_id="proxy:modal_mention_select",
+                    options=[
+                        discord.SelectOption(
+                            label="メンション通知する",
+                            value="true",
+                            default=True,
+                        ),
+                        discord.SelectOption(
+                            label="メンション通知しない",
+                            value="false",
+                        ),
+                    ],
+                ),
+            )
+            self.add_item(self.mention_select)
+
+        input_label = "送信するメッセージを書き込み"
+        if is_reply and reply_label:
+            input_label = reply_label[:45]
+
+        self.message_input: discord.ui.Label[discord.ui.TextInput] = discord.ui.Label(
+            text=input_label,
+            component=discord.ui.TextInput(
+                custom_id="proxy:modal_message_input",
+                style=discord.TextStyle.paragraph,
+                placeholder="ナニガ・キモチーノ",
+                required=True,
+                max_length=2000,
+            ),
+        )
+        self.add_item(self.message_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
 
         # メンション選択値（デフォルト: True）
         mention_author = True
-        try:
-            selected_vals = self.mention_select.component.values
-            if selected_vals and selected_vals[0] == "false":
-                mention_author = False
-        except Exception:
-            mention_author = True
+        if self.mention_select is not None:
+            try:
+                selected_vals = self.mention_select.component.values
+                if selected_vals and selected_vals[0] == "false":
+                    mention_author = False
+            except Exception:
+                mention_author = True
 
         raw_content = self.message_input.component.value or ""
 
@@ -399,14 +519,183 @@ class ProxyMessageModal(discord.ui.Modal, title="メッセージを送信"):
                 self.cog._pending_replies.pop(pending_key, None)
         except ProxyError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
-        except discord.HTTPException as exc:
-            logger.warning("エラー！滅！！！！: %s", exc)
-            await interaction.followup.send(
-                "送信ダメみたいですね（失敗）ちょっと待ってから送りなおしてくれよな～頼むよ～",
-                ephemeral=True,
-            )
+        except Exception as exc:
+            if is_ratelimited_error(exc):
+                await interaction.followup.send(format_ratelimit_message(exc), ephemeral=True)
+            elif isinstance(exc, discord.HTTPException):
+                logger.warning("エラー！滅！！！！: %s", exc)
+                await interaction.followup.send(
+                    "送信ダメみたいですね（失敗）ちょっと待ってから送りなおしてくれよな～頼むよ～",
+                    ephemeral=True,
+                )
+            else:
+                raise exc
         else:
             await interaction.delete_original_response()
+
+
+class ProxyEditModal(discord.ui.Modal, title="メッセージを編集"):
+    """送信済みプロキシメッセージを編集するモーダル。"""
+
+    def __init__(
+        self,
+        cog: ProxyCog,
+        target_message: discord.Message,
+        author_id: int,
+        initial_content: str,
+    ) -> None:
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.target_message = target_message
+        self.author_id = author_id
+
+        self.message_input = discord.ui.TextInput(
+            label="編集後のメッセージ",
+            style=discord.TextStyle.paragraph,
+            default=initial_content[:2000] if initial_content else None,
+            placeholder="メッセージを入力してくれよな～頼むよ～" if not initial_content else None,
+            required=True,
+            max_length=2000,
+        )
+        self.add_item(self.message_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        new_content = self.message_input.value or ""
+        channel = interaction.channel
+        guild = interaction.guild
+
+        if channel is None or guild is None:
+            await interaction.followup.send(
+                "サーバー内のチャンネルでだけ利用できるからね。そして天は鳴き、大地は震えるだろうね",
+                ephemeral=True,
+            )
+            return
+
+        bot_user = self.cog.bot.user
+        if bot_user is None:
+            await interaction.followup.send("Bot の初期化ができてないゾ。", ephemeral=True)
+            return
+
+        try:
+            target_channel, thread = await resolve_webhook_target(channel)
+            webhook = await get_or_create_proxy_webhook(target_channel, bot_user.id)
+
+            # 絵文字ショートコード自動展開
+            emoji_map = await self.cog.get_available_emojis(guild)
+            processed_content = expand_custom_emojis(new_content, emoji_map)
+
+            # 既存メッセージの返信ヘッダーを保持
+            raw_target_content = getattr(self.target_message, "content", "") or ""
+            existing_header = extract_reply_header(raw_target_content)
+
+            if existing_header:
+                full_content = f"{existing_header}\n{processed_content}"
+            else:
+                full_content = processed_content
+
+            # 不可視メタデータを付与して本人識別を維持
+            invisible_meta = encode_proxy_author_id(self.author_id)
+            final_content = f"{full_content}{invisible_meta}"
+
+            edit_kwargs: dict[str, Any] = {
+                "message_id": self.target_message.id,
+                "content": final_content,
+            }
+            if thread is not None:
+                edit_kwargs["thread"] = thread
+
+            await webhook.edit_message(**edit_kwargs)
+            await interaction.followup.send("メッセージを編集したゾ", ephemeral=True)
+        except ProxyError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+        except Exception as exc:
+            if is_ratelimited_error(exc):
+                await interaction.followup.send(format_ratelimit_message(exc), ephemeral=True)
+            elif isinstance(exc, discord.HTTPException):
+                logger.warning("メッセージ編集に失敗しました: %s", exc)
+                await interaction.followup.send(
+                    "編集ダメみたいですね（失敗）ちょっと待ってからやり直してくれよな～頼むよ～",
+                    ephemeral=True,
+                )
+            else:
+                raise exc
+
+
+class ReplyActionChoiceView(discord.ui.View):
+    """返信コンテキストメニュー実行時に「直接返信」か「返信先に設定」かを選ばせる View。"""
+
+    def __init__(
+        self,
+        cog: ProxyCog,
+        target_message: discord.Message,
+        content_preview: str,
+        display_author: str,
+        prompt_interaction: discord.Interaction | None = None,
+    ) -> None:
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.target_message = target_message
+        self.content_preview = content_preview
+        self.display_author = display_author
+        self.prompt_interaction = prompt_interaction
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+        try:
+            if self.prompt_interaction is not None:
+                await self.prompt_interaction.edit_original_response(
+                    content="時間切れだゾ。もう一度やり直してくれよな～",
+                    view=self,
+                )
+        except Exception:
+            pass
+
+    @discord.ui.button(label="直接返信する", emoji="💬", style=discord.ButtonStyle.primary)
+    async def direct_reply_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        channel_id = interaction.channel.id if interaction.channel else interaction.channel_id
+        if channel_id is None:
+            return
+        key = (interaction.user.id, channel_id)
+        self.cog._pending_replies[key] = (self.target_message.id, self.content_preview)
+
+        reply_label = f"返信先: {self.display_author}"
+        modal = ProxyMessageModal(
+            cog=self.cog,
+            launcher_message=None,
+            is_reply=True,
+            reply_label=reply_label,
+        )
+        await interaction.response.send_modal(modal)
+        self.stop()
+
+    @discord.ui.button(label="返信先に設定する", emoji="📌", style=discord.ButtonStyle.secondary)
+    async def set_reply_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        channel_id = interaction.channel.id if interaction.channel else interaction.channel_id
+        if channel_id is None:
+            return
+        key = (interaction.user.id, channel_id)
+        self.cog._pending_replies[key] = (self.target_message.id, self.content_preview)
+
+        display_snippet = self.content_preview if self.content_preview else "(添付ファイルなど)"
+        if len(display_snippet) > 30:
+            display_snippet = display_snippet[:27] + "..."
+        await interaction.response.edit_message(
+            content=(
+                f"返信先をセットしたゾ。オッスお願いしまーす（次回 `/say` または「ほらいくどー」送信時に引用）:\n"
+                f"> **{self.display_author}**: {display_snippet}\n"
+                f"※ 同じメッセージで再度「返信先にセット」を実行すると解除できるゾ"
+            ),
+            view=None,
+        )
+        self.stop()
 
 
 class ProxyLauncherView(discord.ui.View):
@@ -425,9 +714,22 @@ class ProxyLauncherView(discord.ui.View):
     async def open_modal(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        is_reply = False
+        reply_label: str | None = None
+        if interaction.channel is not None:
+            pending_key = (interaction.user.id, interaction.channel.id)
+            pending_data = self.cog._pending_replies.get(pending_key)
+            if pending_data is not None:
+                is_reply = True
+                _, preview = pending_data
+                snippet = preview[:20] + "..." if len(preview) > 20 else preview
+                reply_label = f"返信中: {snippet}" if snippet else "返信中（返信メッセージを入力）"
+
         modal = ProxyMessageModal(
             cog=self.cog,
             launcher_message=interaction.message,
+            is_reply=is_reply,
+            reply_label=reply_label,
         )
         await interaction.response.send_modal(modal)
 
@@ -460,6 +762,12 @@ class ProxyCog(commands.Cog):
             callback=self._context_menu_delete_proxy,
         )
         self.bot.tree.add_command(self.delete_ctx_menu)
+
+        self.edit_ctx_menu = app_commands.ContextMenu(
+            name="メッセージを編集",
+            callback=self._context_menu_edit_proxy,
+        )
+        self.bot.tree.add_command(self.edit_ctx_menu)
 
     def _get_lock(self, channel_id: int) -> asyncio.Lock:
         lock = self._channel_locks.get(channel_id)
@@ -505,6 +813,7 @@ class ProxyCog(commands.Cog):
     async def cog_unload(self) -> None:
         self.bot.tree.remove_command(self.reply_ctx_menu.name, type=self.reply_ctx_menu.type)
         self.bot.tree.remove_command(self.delete_ctx_menu.name, type=self.delete_ctx_menu.type)
+        self.bot.tree.remove_command(self.edit_ctx_menu.name, type=self.edit_ctx_menu.type)
         # 進行中のスロットリングタスクをすべてキャンセル
         for task in self._pending_throttle_tasks.values():
             if not task.done():
@@ -576,6 +885,69 @@ class ProxyCog(commands.Cog):
 
         self.schedule_launcher_repost(channel)
 
+    async def _handle_message_delete_event(
+        self, channel_id: int, deleted_message_id: int
+    ) -> None:
+        """メッセージ削除を検知し、該当メッセージへの返信概要を「削除されたメッセージ」に更新する。"""
+        bot_user = self.bot.user
+        if bot_user is None:
+            return
+
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except Exception:
+                return
+
+        if not hasattr(channel, "history"):
+            return
+
+        try:
+            target_channel, thread = await resolve_webhook_target(channel)
+            webhook = await get_or_create_proxy_webhook(target_channel, bot_user.id)
+        except Exception:
+            return
+
+        try:
+            async for msg in channel.history(limit=50):
+                # Webhook かつ自ボット所有のプロキシメッセージを対象
+                if msg.webhook_id is None:
+                    continue
+
+                raw_content = msg.content or ""
+                new_content, changed = mark_reply_header_as_deleted(
+                    raw_content, deleted_message_id=deleted_message_id
+                )
+                if changed and new_content != raw_content:
+                    try:
+                        edit_kwargs: dict[str, Any] = {
+                            "message_id": msg.id,
+                            "content": new_content,
+                        }
+                        if thread is not None:
+                            edit_kwargs["thread"] = thread
+                        await webhook.edit_message(**edit_kwargs)
+                    except Exception as exc:
+                        logger.debug("削除連動の返信ヘッダー更新に失敗しました: %s", exc)
+        except Exception as exc:
+            logger.debug("削除連動メッセージ走査中にエラーが発生しました: %s", exc)
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
+        """メッセージ削除検知リスナー。"""
+        if payload.cached_message and payload.cached_message.guild is None:
+            return
+        await self._handle_message_delete_event(payload.channel_id, payload.message_id)
+
+    @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(
+        self, payload: discord.RawBulkMessageDeleteEvent
+    ) -> None:
+        """メッセージ一括削除検知リスナー。"""
+        for msg_id in payload.message_ids:
+            await self._handle_message_delete_event(payload.channel_id, msg_id)
+
     async def _context_menu_toggle_reply(
         self, interaction: discord.Interaction, message: discord.Message
     ) -> None:
@@ -598,11 +970,10 @@ class ProxyCog(commands.Cog):
                 ephemeral=True,
             )
         else:
-            # 新規セットまたは別メッセージで上書き（本文キャッシュを保持）
+            # 新規または別メッセージの場合は「直接返信する」「返信先に設定する」を選択させる
             raw_content = message.clean_content or message.content or ""
             # 返信付きメッセージの場合は1行目を除去して本文のみ記録
             content_preview = strip_reply_header(raw_content)
-            self._pending_replies[key] = (message.id, content_preview)
 
             display_author = message.author.display_name
             proxy_author_id = extract_proxy_author_id(message)
@@ -614,10 +985,18 @@ class ProxyCog(commands.Cog):
             display_snippet = content_preview if content_preview else "(添付ファイルなど)"
             if len(display_snippet) > 30:
                 display_snippet = display_snippet[:27] + "..."
+
+            view = ReplyActionChoiceView(
+                cog=self,
+                target_message=message,
+                content_preview=content_preview,
+                display_author=display_author,
+                prompt_interaction=interaction,
+            )
             await interaction.response.send_message(
-                f"返信先をセットしたゾ。オッスお願いしまーす（次回 `/say` 送信時に引用）:\n"
-                f"> **{display_author}**: {display_snippet}\n"
-                f"※ 同じメッセージで再度「返信先にセット」を実行すると解除できるゾ",
+                f"返信のやり方を選んでくれよな～頼むよ～:\n"
+                f"> **{display_author}**: {display_snippet}",
+                view=view,
                 ephemeral=True,
             )
 
@@ -666,6 +1045,42 @@ class ProxyCog(commands.Cog):
             view=view,
             ephemeral=True,
         )
+
+    async def _context_menu_edit_proxy(
+        self, interaction: discord.Interaction, message: discord.Message
+    ) -> None:
+        """メッセージ右クリック「メッセージを編集」から実行された場合の編集モーダル起動ハンドラ。"""
+        if interaction.guild is None or interaction.channel is None:
+            await interaction.response.send_message(
+                "サーバー内のチャンネルでのみ利用できます。", ephemeral=True
+            )
+            return
+
+        author_id = extract_proxy_author_id(message)
+        if author_id is None:
+            await interaction.response.send_message(
+                "これ代替送信メッセージじゃないやん！（編集でき）ないです",
+                ephemeral=True,
+            )
+            return
+
+        if interaction.user.id != author_id:
+            await interaction.response.send_message(
+                "あっおい待てい（江戸っ子）、本人以外は編集できないゾ",
+                ephemeral=True,
+            )
+            return
+
+        raw_content = getattr(message, "content", "") or ""
+        initial_content = extract_editable_content(raw_content)
+
+        modal = ProxyEditModal(
+            cog=self,
+            target_message=message,
+            author_id=author_id,
+            initial_content=initial_content,
+        )
+        await interaction.response.send_modal(modal)
 
     async def post_launcher(self, channel: discord.abc.Messageable) -> discord.Message:
         """指定チャンネルに送信開始ボタン付きメッセージを送信し、最新 ID を記録する。"""
@@ -855,12 +1270,17 @@ class ProxyCog(commands.Cog):
             self._pending_replies.pop(pending_key, None)
         except ProxyError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
-        except discord.HTTPException as exc:
-            logger.warning("直接代替送信に失敗しました: %s", exc)
-            await interaction.followup.send(
-                "送信ダメみたいですね（失敗）ちょっと待ってから送りなおしてくれよな～頼むよ～",
-                ephemeral=True,
-            )
+        except Exception as exc:
+            if is_ratelimited_error(exc):
+                await interaction.followup.send(format_ratelimit_message(exc), ephemeral=True)
+            elif isinstance(exc, discord.HTTPException):
+                logger.warning("直接代替送信に失敗しました: %s", exc)
+                await interaction.followup.send(
+                    "送信ダメみたいですね（失敗）ちょっと待ってから送りなおしてくれよな～頼むよ～",
+                    ephemeral=True,
+                )
+            else:
+                raise exc
         else:
             await interaction.delete_original_response()
 
