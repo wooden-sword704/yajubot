@@ -1,0 +1,19 @@
+[project]
+name = "yajubot"
+version = "0.1.0"
+description = "Python (discord.py) 製の標準的な Discord ボット基盤"
+authors = [
+    { name = "wooden_sword704", email = "148040878+wooden-sword704@users.noreply.github.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "discord-py>=2.7.1",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+yajubot = "yajubot:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
