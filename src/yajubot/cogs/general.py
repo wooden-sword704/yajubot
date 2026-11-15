@@ -1,4 +1,4 @@
-"""基本スラッシュコマンド（/oon, /info, /help）を提供する Cog。"""
+"""基本スラッシュコマンド（/ping, /info, /help）を提供する Cog。"""
 
 from __future__ import annotations
 
@@ -54,8 +54,8 @@ class GeneralCog(commands.Cog):
     def __init__(self, bot: YajuBot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="oon", description="いつレイテンシ計測を受けてもいいように…（有能参謀）")
-    async def oon(self, interaction: discord.Interaction) -> None:
+    @app_commands.command(name="ping", description="いつレイテンシ計測を受けてもいいように…（有能参謀）")
+    async def ping(self, interaction: discord.Interaction) -> None:
         latency = self.bot.latency
         latency_text = (
             "ｵｫﾝ..."

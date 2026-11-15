@@ -58,7 +58,7 @@ class BotSetupAndGeneralHelpersTest(unittest.IsolatedAsyncioTestCase):
                 cmd.name
                 for cmd in bot.tree.get_commands(type=discord.AppCommandType.chat_input)
             }
-            self.assertEqual(cmd_names, {"oon", "info", "help", "proxy", "say"})
+            self.assertEqual(cmd_names, {"ping", "info", "help", "proxy", "say"})
         finally:
             await bot.close()
 
@@ -121,7 +121,7 @@ class BotSetupAndGeneralHelpersTest(unittest.IsolatedAsyncioTestCase):
             assert cog is not None
 
             for method, expect_ephemeral in [
-                (cog.oon.callback, False),  # type: ignore[attr-defined]
+                (cog.ping.callback, False),  # type: ignore[attr-defined]
                 (cog.info.callback, False),  # type: ignore[attr-defined]
                 (cog.help_command.callback, True),  # type: ignore[attr-defined]
             ]:

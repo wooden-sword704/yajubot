@@ -74,13 +74,53 @@ def strip_reply_header(text: str) -> str:
     return text.strip()
 
 
+# ゼロ幅文字を用いた不可視ユーザー ID エンコーディング（メッセージ本文に埋め込み）
+ZW_0 = "\u200b"
+ZW_1 = "\u200c"
+ZW_WRAP = "\u200d"
+
+
+def encode_proxy_author_id(author_id: int) -> str:
+    """ユーザー ID を不可視のゼロ幅文字列にエンコードする。"""
+    bin_str = bin(author_id)[2:]
+    encoded = "".join(ZW_1 if b == "1" else ZW_0 for b in bin_str)
+    return f"{ZW_WRAP}{encoded}{ZW_WRAP}"
+
+
+def decode_proxy_author_id(text: str) -> int | None:
+    """テキスト中に埋め込まれた不可視ゼロ幅文字から送信者ユーザー ID を復元する。"""
+    if not text:
+        return None
+    m = re.search(f"{ZW_WRAP}([{ZW_0}{ZW_1}]+){ZW_WRAP}", text)
+    if not m:
+        return None
+    bin_str = "".join("1" if c == ZW_1 else "0" for c in m.group(1))
+    try:
+        return int(bin_str, 2)
+    except ValueError:
+        return None
+
+
 def extract_proxy_author_id(message: discord.Message) -> int | None:
-    """メッセージがプロキシ送信（Webhook）されたものである場合、削除ボタン等の custom_id から送信者ユーザー ID を抽出する。"""
+    """メッセージがプロキシ送信（Webhook）されたものである場合、送信者ユーザー ID を抽出する。
+
+    1. メッセージ本文に埋め込まれた不可視ゼロ幅文字
+    2. 旧仕様の削除ボタンコンポーネントの custom_id (proxy:delete:<id>)
+    の順で判定する。
+    """
+    # 1. 不可視文字からの復元
+    raw_content = getattr(message, "content", "")
+    if isinstance(raw_content, str):
+        decoded_id = decode_proxy_author_id(raw_content)
+        if decoded_id is not None:
+            return decoded_id
+
+    # 2. 旧仕様のコンポーネント (proxy:delete:<author_id>) からのフォールバック
     if hasattr(message, "components"):
         for row in getattr(message, "components", []):
             for child in getattr(row, "children", []):
                 custom_id = getattr(child, "custom_id", None)
-                if custom_id:
+                if custom_id and isinstance(custom_id, str):
                     m = re.match(r"^proxy:delete:(?P<author_id>\d+)$", custom_id)
                     if m:
                         return int(m.group("author_id"))
@@ -456,6 +496,12 @@ class ProxyCog(commands.Cog):
         )
         self.bot.tree.add_command(self.reply_ctx_menu)
 
+        self.delete_ctx_menu = app_commands.ContextMenu(
+            name="メッセージを削除",
+            callback=self._context_menu_delete_proxy,
+        )
+        self.bot.tree.add_command(self.delete_ctx_menu)
+
     def _get_lock(self, channel_id: int) -> asyncio.Lock:
         lock = self._channel_locks.get(channel_id)
         if lock is None:
@@ -501,6 +547,7 @@ class ProxyCog(commands.Cog):
     async def cog_unload(self) -> None:
         self.bot.remove_dynamic_items(ProxyDeleteButton)
         self.bot.tree.remove_command(self.reply_ctx_menu.name, type=self.reply_ctx_menu.type)
+        self.bot.tree.remove_command(self.delete_ctx_menu.name, type=self.delete_ctx_menu.type)
         # 進行中のスロットリングタスクをすべてキャンセル
         for task in self._pending_throttle_tasks.values():
             if not task.done():
@@ -617,6 +664,48 @@ class ProxyCog(commands.Cog):
                 ephemeral=True,
             )
 
+    async def _context_menu_delete_proxy(
+        self, interaction: discord.Interaction, message: discord.Message
+    ) -> None:
+        """メッセージ右クリック「メッセージを削除」から実行された場合の削除確認ハンドラ。"""
+        if interaction.guild is None or interaction.channel is None:
+            await interaction.response.send_message(
+                "サーバー内のチャンネルでのみ利用できます。", ephemeral=True
+            )
+            return
+
+        # プロキシメッセージ判定（不可視埋め込み ID または旧コンポーネント ID）
+        author_id = extract_proxy_author_id(message)
+
+        if author_id is None:
+            # 該当メッセージがボット自身の通常メッセージか確認（待機パネル等）
+            if (
+                interaction.client.user
+                and message.author.id == interaction.client.user.id
+                and interaction.user.guild_permissions.manage_messages
+            ):
+                author_id = interaction.user.id
+            else:
+                await interaction.response.send_message(
+                    "このメッセージは代替送信メッセージではないため、削除できません。",
+                    ephemeral=True,
+                )
+                return
+
+        if interaction.user.id != author_id:
+            await interaction.response.send_message(
+                "あっおい待てい（江戸っ子）、本人以外は削除できないゾ",
+                ephemeral=True,
+            )
+            return
+
+        view = ConfirmDeleteView(target_message=message, author_id=author_id)
+        await interaction.response.send_message(
+            "本当にこのメッセージを削除しますか？",
+            view=view,
+            ephemeral=True,
+        )
+
     async def post_launcher(self, channel: discord.abc.Messageable) -> discord.Message:
         """指定チャンネルに送信開始ボタン付きメッセージを送信し、最新 ID を記録する。"""
         message = await channel.send(
@@ -691,12 +780,15 @@ class ProxyCog(commands.Cog):
                 users=True if mention_author else False,
             )
 
+            # 不可視ゼロ幅文字で送信者ユーザー ID を本文末尾に埋め込む（右クリック削除や返信時の本人判定用）
+            invisible_meta = encode_proxy_author_id(interaction.user.id)
+            final_content = f"{full_content}{invisible_meta}"
+
             send_kwargs: dict[str, Any] = {
-                "content": full_content,
+                "content": final_content,
                 "username": username,
                 "avatar_url": avatar_url,
                 "allowed_mentions": allowed_mentions,
-                "view": ProxyMessageView(author_id=interaction.user.id),
                 "wait": True,
             }
             if thread is not None:
