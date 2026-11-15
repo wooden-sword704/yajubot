@@ -249,10 +249,30 @@ async def delete_webhook_message(
 class ConfirmDeleteView(discord.ui.View):
     """送信者本人向けのエフェメラル削除確認ダイアログ。"""
 
-    def __init__(self, target_message: discord.Message, author_id: int) -> None:
+    def __init__(
+        self,
+        target_message: discord.Message,
+        author_id: int,
+        prompt_interaction: discord.Interaction | None = None,
+    ) -> None:
         super().__init__(timeout=60)
         self.target_message = target_message
         self.author_id = author_id
+        self.prompt_interaction = prompt_interaction
+
+    async def on_timeout(self) -> None:
+        """タイムアウト（60秒放置）時にボタンを無効化してメッセージを更新する。"""
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+        try:
+            if self.prompt_interaction is not None:
+                await self.prompt_interaction.edit_original_response(
+                    content="時間切れだゾ。削除ボタンは無効化されたゾ。",
+                    view=self,
+                )
+        except Exception:
+            pass
 
     @discord.ui.button(label="はい、ヨロシクぅ！", style=discord.ButtonStyle.danger)
     async def confirm_button(
@@ -292,67 +312,6 @@ class ConfirmDeleteView(discord.ui.View):
             content="キャンセルしたゾ", view=None
         )
         self.stop()
-
-
-class ProxyDeleteButton(
-    discord.ui.DynamicItem[discord.ui.Button],
-    template=r"proxy:delete:(?P<author_id>\d+)",
-):
-    """Webhook メッセージに付与する永続削除ボタン（送信者 ID を custom_id に保持）。"""
-
-    def __init__(self, author_id: int) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="削除",
-                emoji="🗑️",
-                style=discord.ButtonStyle.secondary,
-                custom_id=f"proxy:delete:{author_id}",
-            )
-        )
-        self.author_id = author_id
-
-    @classmethod
-    async def from_custom_id(
-        cls,
-        interaction: discord.Interaction,
-        item: discord.ui.Item,
-        match: re.Match[str],
-        /,
-    ) -> ProxyDeleteButton:
-        return cls(int(match.group("author_id")))
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message(
-                "あっおい待てい（江戸っ子）、本人以外は削除できないゾ",
-                ephemeral=True,
-            )
-            return
-
-        if interaction.message is None:
-            await interaction.response.send_message(
-                "削除対象のメッセージが読み込めなかったゾ...",
-                ephemeral=True,
-            )
-            return
-
-        view = ConfirmDeleteView(
-            target_message=interaction.message,
-            author_id=self.author_id,
-        )
-        await interaction.response.send_message(
-            "メッセージ削除いいすかぁ？",
-            view=view,
-            ephemeral=True,
-        )
-
-
-class ProxyMessageView(discord.ui.View):
-    """Webhook で送信されたメッセージに添付する View。"""
-
-    def __init__(self, author_id: int) -> None:
-        super().__init__(timeout=None)
-        self.add_item(ProxyDeleteButton(author_id))
 
 
 class ProxyMessageModal(discord.ui.Modal, title="メッセージを送信"):
@@ -542,10 +501,8 @@ class ProxyCog(commands.Cog):
 
     async def cog_load(self) -> None:
         self.bot.add_view(ProxyLauncherView(self))
-        self.bot.add_dynamic_items(ProxyDeleteButton)
 
     async def cog_unload(self) -> None:
-        self.bot.remove_dynamic_items(ProxyDeleteButton)
         self.bot.tree.remove_command(self.reply_ctx_menu.name, type=self.reply_ctx_menu.type)
         self.bot.tree.remove_command(self.delete_ctx_menu.name, type=self.delete_ctx_menu.type)
         # 進行中のスロットリングタスクをすべてキャンセル
@@ -687,7 +644,7 @@ class ProxyCog(commands.Cog):
                 author_id = interaction.user.id
             else:
                 await interaction.response.send_message(
-                    "このメッセージは代替送信メッセージではないため、削除できません。",
+                    "これ代替送信メッセージじゃないやん！（削除でき）ないです",
                     ephemeral=True,
                 )
                 return
@@ -699,9 +656,13 @@ class ProxyCog(commands.Cog):
             )
             return
 
-        view = ConfirmDeleteView(target_message=message, author_id=author_id)
+        view = ConfirmDeleteView(
+            target_message=message,
+            author_id=author_id,
+            prompt_interaction=interaction,
+        )
         await interaction.response.send_message(
-            "本当にこのメッセージを削除しますか？",
+            "メッセージ削除いいすかぁ？",
             view=view,
             ephemeral=True,
         )

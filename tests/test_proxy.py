@@ -13,9 +13,8 @@ from yajubot.bot import YajuBot
 from yajubot.cogs.proxy import (
     ConfirmDeleteView,
     ProxyCog,
-    ProxyDeleteButton,
     ProxyError,
-    ProxyMessageView,
+    encode_proxy_author_id,
     get_or_create_proxy_webhook,
 )
 from yajubot.config import BotConfig
@@ -137,41 +136,44 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await bot.close()
 
-    async def test_delete_button_rejects_other_user_and_confirms_for_author(self) -> None:
-        match = re.match(r"proxy:delete:(?P<author_id>\d+)", "proxy:delete:42")
-        assert match is not None
+    async def test_context_menu_delete_proxy(self) -> None:
+        bot = YajuBot(BotConfig(token="dummy-token"))
+        try:
+            cog = ProxyCog(bot)
 
-        button = await ProxyDeleteButton.from_custom_id(
-            MagicMock(spec=discord.Interaction),
-            MagicMock(spec=discord.ui.Button),
-            match,
-        )
-        self.assertEqual(button.author_id, 42)
+            encoded_id = encode_proxy_author_id(42)
+            target_message = MagicMock(spec=discord.Message)
+            target_message.id = 1234
+            target_message.content = f"テスト{encoded_id}"
 
-        # 他人が押した場合は拒否
-        other_interaction = MagicMock(spec=discord.Interaction)
-        other_interaction.user = SimpleNamespace(id=999)
-        other_interaction.response = MagicMock()
-        other_interaction.response.send_message = AsyncMock()
+            # 他人による右クリック実行
+            other_interaction = MagicMock(spec=discord.Interaction)
+            other_interaction.guild = MagicMock(spec=discord.Guild)
+            other_interaction.channel = MagicMock(spec=discord.TextChannel)
+            other_interaction.user = SimpleNamespace(id=999)
+            other_interaction.response = MagicMock()
+            other_interaction.response.send_message = AsyncMock()
 
-        await button.callback(other_interaction)
-        other_interaction.response.send_message.assert_awaited_once()
-        self.assertTrue(other_interaction.response.send_message.call_args.kwargs["ephemeral"])
-        self.assertNotIn("view", other_interaction.response.send_message.call_args.kwargs)
+            await cog._context_menu_delete_proxy(other_interaction, target_message)
+            other_interaction.response.send_message.assert_awaited_once()
+            self.assertTrue(other_interaction.response.send_message.call_args.kwargs["ephemeral"])
+            self.assertNotIn("view", other_interaction.response.send_message.call_args.kwargs)
 
-        # 本人が押した場合はエフェメラルの確認ダイアログを表示
-        target_message = MagicMock(spec=discord.Message)
-        author_interaction = MagicMock(spec=discord.Interaction)
-        author_interaction.user = SimpleNamespace(id=42)
-        author_interaction.message = target_message
-        author_interaction.response = MagicMock()
-        author_interaction.response.send_message = AsyncMock()
+            # 送信者本人による右クリック実行
+            author_interaction = MagicMock(spec=discord.Interaction)
+            author_interaction.guild = MagicMock(spec=discord.Guild)
+            author_interaction.channel = MagicMock(spec=discord.TextChannel)
+            author_interaction.user = SimpleNamespace(id=42)
+            author_interaction.response = MagicMock()
+            author_interaction.response.send_message = AsyncMock()
 
-        await button.callback(author_interaction)
-        author_interaction.response.send_message.assert_awaited_once()
-        kwargs = author_interaction.response.send_message.call_args.kwargs
-        self.assertTrue(kwargs["ephemeral"])
-        self.assertIsInstance(kwargs["view"], ConfirmDeleteView)
+            await cog._context_menu_delete_proxy(author_interaction, target_message)
+            author_interaction.response.send_message.assert_awaited_once()
+            kwargs = author_interaction.response.send_message.call_args.kwargs
+            self.assertTrue(kwargs["ephemeral"])
+            self.assertIsInstance(kwargs["view"], ConfirmDeleteView)
+        finally:
+            await bot.close()
 
     async def test_confirm_delete_view_deletes_and_cancels(self) -> None:
         target_message = MagicMock(spec=discord.Message)
@@ -211,6 +213,23 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             cancel_interaction.response.edit_message.call_args.kwargs["view"]
         )
+
+        # タイムアウト時の無効化
+        mock_prompt_interaction = MagicMock(spec=discord.Interaction)
+        mock_prompt_interaction.edit_original_response = AsyncMock()
+        view3 = ConfirmDeleteView(
+            target_message=target_message,
+            author_id=42,
+            prompt_interaction=mock_prompt_interaction,
+        )
+        self.assertFalse(view3.confirm_button.disabled)
+        self.assertFalse(view3.cancel_button.disabled)
+
+        await view3.on_timeout()
+        self.assertTrue(view3.confirm_button.disabled)
+        self.assertTrue(view3.cancel_button.disabled)
+        mock_prompt_interaction.edit_original_response.assert_awaited_once()
+        self.assertIn("時間切れだゾ", mock_prompt_interaction.edit_original_response.call_args.kwargs["content"])
 
     async def test_format_reply_header(self) -> None:
         from yajubot.cogs.proxy import (
