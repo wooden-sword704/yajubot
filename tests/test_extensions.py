@@ -52,13 +52,18 @@ class BotSetupAndGeneralHelpersTest(unittest.IsolatedAsyncioTestCase):
             mock_sync.assert_awaited_once()
             self.assertIn("GeneralCog", bot.cogs)
             self.assertIn("ProxyCog", bot.cogs)
+            self.assertIn("AdminCog", bot.cogs)
+            self.assertIn("OmikujiCog", bot.cogs)
             self.assertIn("LifecycleEvents", bot.cogs)
 
             cmd_names = {
                 cmd.name
                 for cmd in bot.tree.get_commands(type=discord.AppCommandType.chat_input)
             }
-            self.assertEqual(cmd_names, {"ping", "info", "help", "proxy", "say"})
+            self.assertEqual(
+                cmd_names,
+                {"ping", "info", "help", "proxy", "say", "admin", "omikuji", "omikuji_reset"},
+            )
         finally:
             await bot.close()
 

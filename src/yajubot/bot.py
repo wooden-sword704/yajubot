@@ -12,6 +12,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from yajubot.config import BotConfig
+from yajubot.storage import ProxyStorage
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +74,11 @@ class YajuCommandTree(app_commands.CommandTree):
         elif isinstance(error, discord.HTTPException) and getattr(error, "status", None) == 429:
             message = "冷えてるか～？（レート制限） ちょっと時間をおいてからやり直してくれよな～頼むよ～"
         elif isinstance(error, app_commands.MissingPermissions):
-            message = "このコマンドを実行するための権限がありません。"
+            message = "実行権限がありませんねぇスギィ！"
         elif isinstance(error, app_commands.BotMissingPermissions):
-            message = "ボットに必要な権限が不足しているため、コマンドを実行できません。"
+            message = "これマジ？上半身に比べてボット権限が貧弱すぎるだろ…"
         elif isinstance(error, app_commands.CheckFailure):
-            message = "このコマンドを実行する条件を満たしていません。"
+            message = "このコマンドを実行する条件確認できず"
         else:
             logger.error(
                 "スラッシュコマンド '/%s' の実行中にエラーが発生しました。",
@@ -92,7 +93,12 @@ class YajuCommandTree(app_commands.CommandTree):
 class YajuBot(commands.Bot):
     """yajubot のメイン Bot クラス。"""
 
-    def __init__(self, config: BotConfig) -> None:
+    def __init__(
+        self,
+        config: BotConfig,
+        *,
+        storage: ProxyStorage | None = None,
+    ) -> None:
         intents = discord.Intents.default()
         # Message Content Intent を有効化（Developer Portalで有効化されている場合、メッセージ本文が取得可能）
         intents.message_content = True
@@ -101,9 +107,20 @@ class YajuBot(commands.Bot):
             intents=intents,
             tree_cls=YajuCommandTree,
             help_command=None,
+            # 1GB RAM / 9000人規模環境向けにメモリ消費を抑制
+            max_messages=200,
+            chunk_guilds_at_startup=False,
         )
         self.config = config
         self.started_at: datetime = datetime.now(timezone.utc)
+        self.storage: ProxyStorage = storage or ProxyStorage()
+
+    async def close(self) -> None:
+        try:
+            self.storage.close()
+        except Exception:
+            logger.debug("ストレージのクローズ中にエラーが発生しました。", exc_info=True)
+        await super().close()
 
     async def load_extensions_from(
         self, package_name: str, package_dir: Path

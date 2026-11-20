@@ -20,8 +20,9 @@ dist/
 .coverage
 htmlcov/
 
-# ログ・一時ファイル
+# ログ・一時ファイル・ローカルDB/暗号鍵
 logs/
+data/
 *.log
 
 # OS / エディタ

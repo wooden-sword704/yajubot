@@ -54,10 +54,13 @@ class ProxyWebhookTest(unittest.IsolatedAsyncioTestCase):
 
 class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
     async def test_send_proxy_message_posts_webhook_and_reposts_launcher(self) -> None:
-        bot = YajuBot(BotConfig(token="dummy-token"))
+        from yajubot.storage import ProxyStorage
+
+        bot = YajuBot(BotConfig(token="dummy-token"), storage=ProxyStorage(":memory:"))
         try:
             cog = ProxyCog(bot)
             bot_user = SimpleNamespace(id=100)
+            bot.storage.set_proxy_roles(1, [10])
 
             old_partial = MagicMock()
             old_partial.delete = AsyncMock()
@@ -71,16 +74,22 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
             cog._latest_launcher_ids[555] = 666
 
             webhook = MagicMock(spec=discord.Webhook)
-            webhook.send = AsyncMock()
+            webhook.send = AsyncMock(return_value=SimpleNamespace(id=9001))
 
             member = MagicMock(spec=discord.Member)
             member.id = 42
+            member.roles = [SimpleNamespace(id=10)]
+            member.guild_permissions = discord.Permissions(send_messages=True)
             member.display_name = "サーバーニックネーム"
             member.display_avatar = SimpleNamespace(url="https://example.com/server.png")
 
+            guild = MagicMock(spec=discord.Guild)
+            guild.id = 1
+            guild.emojis = []
+
             interaction = MagicMock(spec=discord.Interaction)
             interaction.channel = channel
-            interaction.guild = MagicMock(spec=discord.Guild)
+            interaction.guild = guild
             interaction.user = member
 
             with (
@@ -114,6 +123,7 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(cog._latest_launcher_ids[555], 777)
 
             # 直接送信（repost_launcher=False）時は待機ボタンの削除・再送信を行わない
+            cog._user_cooldowns.clear()
             old_partial.delete.reset_mock()
             channel.send.reset_mock()
             webhook.send.reset_mock()
@@ -391,20 +401,25 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
             self.assertLessEqual(channel.send.await_count, 2)
         finally:
             await bot.close()
-        bot = YajuBot(BotConfig(token="dummy-token"))
+        from yajubot.storage import ProxyStorage
+
+        bot = YajuBot(BotConfig(token="dummy-token"), storage=ProxyStorage(":memory:"))
         try:
             cog = ProxyCog(bot)
+            bot.storage.set_proxy_roles(1, [10])
             msg1 = MagicMock(spec=discord.Message)
             msg1.id = 111
             msg1.clean_content = "テストメッセージ1"
             msg1.author = SimpleNamespace(display_name="ユーザーA")
 
+            guild = MagicMock(spec=discord.Guild)
+            guild.id = 1
             interaction = MagicMock(spec=discord.Interaction)
-            interaction.guild = MagicMock(spec=discord.Guild)
+            interaction.guild = guild
             channel = MagicMock(spec=discord.TextChannel)
             channel.id = 999
             interaction.channel = channel
-            interaction.user = SimpleNamespace(id=42)
+            interaction.user = SimpleNamespace(id=42, roles=[SimpleNamespace(id=10)])
             interaction.response = MagicMock()
             interaction.response.send_message = AsyncMock()
 
@@ -458,8 +473,9 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
             from yajubot.cogs.proxy import ProxyLauncherView
             launcher_view = ProxyLauncherView(cog)
             open_interaction = MagicMock(spec=discord.Interaction)
+            open_interaction.guild = guild
             open_interaction.channel = channel
-            open_interaction.user = SimpleNamespace(id=42)
+            open_interaction.user = SimpleNamespace(id=42, roles=[SimpleNamespace(id=10)])
             open_interaction.message = MagicMock(spec=discord.Message)
             open_interaction.response = MagicMock()
             open_interaction.response.send_modal = AsyncMock()
@@ -472,10 +488,13 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
             await bot.close()
 
     async def test_say_proxy_with_reply_embed(self) -> None:
-        bot = YajuBot(BotConfig(token="dummy-token"))
+        from yajubot.storage import ProxyStorage
+
+        bot = YajuBot(BotConfig(token="dummy-token"), storage=ProxyStorage(":memory:"))
         try:
             cog = ProxyCog(bot)
             bot_user = SimpleNamespace(id=100)
+            bot.storage.set_proxy_roles(1, [10])
 
             channel = MagicMock(spec=discord.TextChannel)
             channel.id = 555
@@ -489,16 +508,25 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
 
             channel.fetch_message = AsyncMock(return_value=reply_target)
 
+            guild = MagicMock(spec=discord.Guild)
+            guild.id = 1
+            guild.emojis = []
+
             interaction = MagicMock(spec=discord.Interaction)
             interaction.channel = channel
-            interaction.guild = MagicMock(spec=discord.Guild)
-            interaction.user = SimpleNamespace(id=42, display_name="送信者", display_avatar=SimpleNamespace(url="https://example.com/me.png"))
+            interaction.guild = guild
+            interaction.user = SimpleNamespace(
+                id=42,
+                roles=[SimpleNamespace(id=10)],
+                display_name="送信者",
+                display_avatar=SimpleNamespace(url="https://example.com/me.png"),
+            )
             interaction.response = MagicMock()
             interaction.response.defer = AsyncMock()
             interaction.delete_original_response = AsyncMock()
 
             webhook = MagicMock(spec=discord.Webhook)
-            webhook.send = AsyncMock()
+            webhook.send = AsyncMock(return_value=SimpleNamespace(id=9002))
 
             with (
                 patch.object(type(bot), "user", new=bot_user),
@@ -516,6 +544,7 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(kwargs["allowed_mentions"].users)
 
                 # メンションOFF（ユーザー通知なし・ハイライトなし）
+                cog._user_cooldowns.clear()
                 webhook.send.reset_mock()
                 await cog.say_proxy.callback(
                     cog, interaction, "返信付きテスト2", reply_to="888", mention=False
@@ -552,10 +581,21 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(editable, "本文だよ")
 
     async def test_on_raw_message_delete_updates_proxy_reply(self) -> None:
-        bot = YajuBot(BotConfig(token="dummy-token"))
+        from yajubot.storage import ProxyStorage
+
+        bot = YajuBot(BotConfig(token="dummy-token"), storage=ProxyStorage(":memory:"))
         try:
             cog = ProxyCog(bot)
             bot_user = SimpleNamespace(id=100)
+
+            bot.storage.record_proxy_message(
+                proxy_msg_id=7001,
+                guild_id=1,
+                channel_id=555,
+                author_id=42,
+                content="返信本文",
+                reply_target_id=888,
+            )
 
             channel = MagicMock(spec=discord.TextChannel)
             channel.id = 555
@@ -566,17 +606,7 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
             proxy_msg.content = (
                 "<:reply1:1571547845683712101><:reply2:1571547847264829490>@先輩 :[削除されるやつ](https://discord.com/channels/1/2/888)\n返信本文"
             )
-
-            other_msg = MagicMock(spec=discord.Message)
-            other_msg.id = 7002
-            other_msg.webhook_id = None
-            other_msg.content = "通常のメッセージ"
-
-            async def mock_history(limit=50):
-                yield proxy_msg
-                yield other_msg
-
-            channel.history = mock_history
+            channel.fetch_message = AsyncMock(return_value=proxy_msg)
 
             webhook = MagicMock(spec=discord.Webhook)
             webhook.edit_message = AsyncMock()
@@ -599,13 +629,24 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(kwargs["message_id"], 7001)
                 self.assertIn("削除されたメッセージ", kwargs["content"])
                 self.assertNotIn("@先輩", kwargs["content"])
+
+                # 関係ない通常メッセージの削除では API を叩かないことを確認
+                webhook.edit_message.reset_mock()
+                channel.fetch_message.reset_mock()
+                payload_unrelated = discord.RawMessageDeleteEvent(
+                    {"id": 99999, "channel_id": 555, "guild_id": 1}
+                )
+                await cog.on_raw_message_delete(payload_unrelated)
+                channel.fetch_message.assert_not_awaited()
+                webhook.edit_message.assert_not_awaited()
         finally:
             await bot.close()
 
     async def test_context_menu_edit_proxy_and_modal_submit(self) -> None:
         from yajubot.cogs.proxy import ProxyEditModal
+        from yajubot.storage import ProxyStorage
 
-        bot = YajuBot(BotConfig(token="dummy-token"))
+        bot = YajuBot(BotConfig(token="dummy-token"), storage=ProxyStorage(":memory:"))
         try:
             cog = ProxyCog(bot)
             bot_user = SimpleNamespace(id=100)
@@ -644,8 +685,10 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
             # モーダル送信（Webhook 編集の実行）
             submit_interaction = MagicMock(spec=discord.Interaction)
             submit_interaction.guild = MagicMock(spec=discord.Guild)
+            submit_interaction.guild.id = 1
             submit_interaction.guild.emojis = []
             submit_interaction.channel = MagicMock(spec=discord.TextChannel)
+            submit_interaction.channel.id = 555
             submit_interaction.user = SimpleNamespace(id=42)
             submit_interaction.response = MagicMock()
             submit_interaction.response.defer = AsyncMock()
