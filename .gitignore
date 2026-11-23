@@ -24,6 +24,8 @@ htmlcov/
 logs/
 data/
 *.log
+deploy.bat
+deploy_git.py
 
 # OS / エディタ
 .DS_Store
