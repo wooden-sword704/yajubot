@@ -1542,6 +1542,44 @@ class ProxyCog(commands.Cog):
         )
 
     @app_commands.command(
+        name="proxy_remove",
+        description="設置されたプロキシ送信パネルを削除するゾ",
+    )
+    @app_commands.guild_only()
+    async def remove_proxy(self, interaction: discord.Interaction) -> None:
+        channel = interaction.channel
+        guild = interaction.guild
+        if channel is None or guild is None:
+            await interaction.response.send_message(
+                "チャンネル情報を取得できなかったゾ。お兄さん許して～", ephemeral=True
+            )
+            return
+
+        if not can_manage_bot(interaction.user, self.bot.storage, guild.id):
+            await interaction.response.send_message(
+                "パネルの削除は管理者または許可された管理ロールのみ実行できるゾ。",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        async with self._get_lock(channel.id):
+            latest_id = self._latest_launcher_ids.get(channel.id)
+            if latest_id is None:
+                await interaction.followup.send(
+                    "このチャンネルに設置されているプロキシパネルが見つからなかったゾ。",
+                    ephemeral=True,
+                )
+                return
+            await self._delete_previous_launcher(channel, None)
+            self._latest_launcher_ids.pop(channel.id, None)
+            self._active_proxy_channels.discard(channel.id)
+
+        await interaction.followup.send(
+            "プロキシパネルを削除したゾ。", ephemeral=True
+        )
+
+    @app_commands.command(
         name="say",
         description="メッセージをボットが代わりに送信するゾ。（メッセージが）いっぱいいっぱい裕次郎",
     )

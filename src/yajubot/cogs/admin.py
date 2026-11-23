@@ -53,7 +53,7 @@ def build_settings_embed(settings: GuildSettings) -> discord.Embed:
 
     embed = discord.Embed(
         title="yajubot 管理設定パネル",
-        description="ロール権限・ログチャンネルの設定、および暗号化ログからの送信者照会・削除ログ閲覧が行えます。",
+        description="ロール権限・ログチャンネルの設定、および暗号化ログからの送信者照会・削除ログ閲覧が行えるゾ",
         color=discord.Color.gold(),
     )
     embed.add_field(name="発信・返信 許可ロール", value=proxy_roles_text, inline=False)
@@ -340,6 +340,124 @@ class AdminPanelView(discord.ui.View):
         view = DeletedLogsView(self.bot, self.guild_id)
         await interaction.response.send_message(
             embed=view.build_current_embed(), view=view, ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="便乗機能設定", emoji="🗣️", style=discord.ButtonStyle.secondary, row=3
+    )
+    async def binjou_settings_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        settings = self.bot.storage.get_guild_settings(self.guild_id)
+        view = BinjouSettingsView(self.bot, self.guild_id)
+        await interaction.response.send_message(
+            embed=build_binjou_settings_embed(settings), view=view, ephemeral=True
+        )
+
+
+def build_binjou_settings_embed(settings: GuildSettings) -> discord.Embed:
+    """便乗機能設定の現在値を表示する Embed を生成する。"""
+    channels_text = (
+        ", ".join(f"<#{cid}>" for cid in settings.binjou_channel_ids)
+        if settings.binjou_channel_ids
+        else "未設定（どのチャンネルでも発動しません）"
+    )
+    embed = discord.Embed(
+        title="🗣️ 便乗機能設定",
+        description="便乗ボットの仮再現機能の設定をするゾ。腹減ったなぁ～",
+        color=discord.Color.blue(),
+    )
+    embed.add_field(name="有効チャンネル", value=channels_text, inline=False)
+    embed.add_field(
+        name="発動確率",
+        value=f"**{settings.binjou_probability:.1f}%**",
+        inline=False,
+    )
+    return embed
+
+
+class BinjouProbabilityModal(discord.ui.Modal, title="便乗発動確率の設定"):
+    """便乗機能の発動確率（0〜100%）を入力するモーダル。"""
+
+    probability_input: discord.ui.TextInput = discord.ui.TextInput(
+        label="発動確率（0〜100 の数値 / %）",
+        placeholder="例: 5 または 12.5",
+        required=True,
+        max_length=10,
+    )
+
+    def __init__(self, bot: YajuBot, guild_id: int, parent_view: BinjouSettingsView) -> None:
+        super().__init__()
+        self.bot = bot
+        self.guild_id = guild_id
+        self.parent_view = parent_view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = self.probability_input.value.strip().rstrip("%")
+        try:
+            prob = float(raw)
+        except ValueError:
+            await interaction.response.send_message(
+                "0〜100 の数値を入力してくれよな～頼むよ～", ephemeral=True
+            )
+            return
+        if not (0.0 <= prob <= 100.0):
+            await interaction.response.send_message(
+                "確率は 0 〜 100 の範囲で指定してくれよな～", ephemeral=True
+            )
+            return
+        settings = self.bot.storage.set_binjou_probability(self.guild_id, prob)
+        await interaction.response.edit_message(
+            embed=build_binjou_settings_embed(settings), view=self.parent_view
+        )
+
+
+class BinjouSettingsView(discord.ui.View):
+    """便乗機能のチャンネル・確率設定 View。"""
+
+    def __init__(self, bot: YajuBot, guild_id: int) -> None:
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.guild_id = guild_id
+
+    @discord.ui.select(
+        cls=discord.ui.ChannelSelect,
+        channel_types=[
+            discord.ChannelType.text,
+            discord.ChannelType.public_thread,
+            discord.ChannelType.private_thread,
+        ],
+        placeholder="便乗を有効にするチャンネルを選択（未選択で解除）",
+        min_values=0,
+        max_values=25,
+        row=0,
+    )
+    async def binjou_channel_select(
+        self, interaction: discord.Interaction, select: discord.ui.ChannelSelect
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        channel_ids = [c.id for c in select.values]
+        settings = self.bot.storage.set_binjou_channels(self.guild_id, channel_ids)
+        await interaction.response.edit_message(
+            embed=build_binjou_settings_embed(settings), view=self
+        )
+
+    @discord.ui.button(
+        label="確率を設定", emoji="🎲", style=discord.ButtonStyle.primary, row=1
+    )
+    async def set_probability_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        await interaction.response.send_modal(
+            BinjouProbabilityModal(self.bot, self.guild_id, self)
         )
 
 

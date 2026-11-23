@@ -52,40 +52,40 @@ class OmikujiRandomCategory:
 # 初期設定: 6ティア（均等確率。必要に応じて probability を編集してください）
 OMIKUJI_TIERS: tuple[OmikujiTier, ...] = (
     OmikujiTier(
-        name="超大吉",
+        name="お　お　あ　た　り",
         color=0xFF69B4,
-        probability=16.67,
-        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["超大吉"]},
+        probability=0.1,
+        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["おおあたり"]},
     ),
     OmikujiTier(
-        name="大吉",
+        name="ビリー兄貴級",
         color=0xFFD700,
-        probability=16.67,
-        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["大吉"]},
+        probability=15,
+        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["ビリー"]},
     ),
     OmikujiTier(
-        name="中吉",
+        name="野獣先輩級",
         color=0x2ECC71,
-        probability=16.67,
-        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["中吉"]},
+        probability=30,
+        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["野獣"]},
     ),
     OmikujiTier(
-        name="小吉",
+        name="MUR大先輩級",
         color=0x3498DB,
-        probability=16.67,
-        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["小吉"]},
+        probability=30,
+        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["MUR"]},
     ),
     OmikujiTier(
-        name="末吉",
+        name="拓也さん級",
         color=0x95A5A6,
-        probability=16.66,
-        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["末吉"]},
+        probability=25,
+        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["拓也"]},
     ),
     OmikujiTier(
-        name="凶",
+        name="<a:gabigabipinky:1574377152311337040> お　お　は　ず　れ <a:gabigabipinky:1574377152311337040>",
         color=0xE74C3C,
-        probability=16.66,
-        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["凶"]},
+        probability=0.1,
+        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["ピンキー"]},
     ),
 )
 

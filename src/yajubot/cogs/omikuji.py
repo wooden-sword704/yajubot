@@ -87,12 +87,25 @@ def draw_omikuji(
     )
 
 
+from pathlib import Path
+
+OMIKUJI_IMAGES_DIR = Path(__file__).resolve().parent.parent / "omikuji_data" / "images"
+
+
+def _get_tier_image_path(tier_name: str) -> Path | None:
+    if "お　お　は　ず　れ" in tier_name:
+        return OMIKUJI_IMAGES_DIR / "oohazure.jpg"
+    if "お　お　あ　た　り" in tier_name:
+        return OMIKUJI_IMAGES_DIR / "ooatari.jpg"
+    return None
+
+
 def build_omikuji_embed(
     user: discord.abc.User,
     result: OmikujiDrawResult,
     drawn_at: str,
-) -> discord.Embed:
-    """おみくじ結果表示用の Embed を生成する。"""
+) -> tuple[discord.Embed, discord.File | None]:
+    """おみくじ結果表示用の Embed と添付画像を生成する。"""
     embed = discord.Embed(
         title=f"{user.display_name}のおみくじ",
         color=discord.Color(result.tier.color),
@@ -100,85 +113,61 @@ def build_omikuji_embed(
     embed.add_field(name="運勢", value=result.tier.name, inline=False)
     for category, value in result.items:
         embed.add_field(name=category, value=value, inline=False)
-    return embed
+
+    image_file: discord.File | None = None
+    image_path = _get_tier_image_path(result.tier.name)
+    if image_path is not None and image_path.is_file():
+        image_file = discord.File(image_path, filename=image_path.name)
+        embed.set_image(url=f"attachment://{image_path.name}")
+
+    return embed, image_file
 
 
 class OmikujiCog(commands.Cog):
     """おみくじコマンドを提供する Cog。"""
+
+    # デバッグ用: True の間は1日1回制限を無効化（False に戻すと制限が復活）
+    DEBUG_NO_COOLDOWN: bool = True
 
     def __init__(self, bot: YajuBot) -> None:
         self.bot = bot
 
     @app_commands.command(
         name="omikuji",
-        description="1日1回おみくじを引きます（毎日 0:00 JST リセット）",
+        description="おみくじを引きます",
     )
     @app_commands.guild_only()
     async def omikuji(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
-                "サーバー内のチャンネルでのみ利用できるゾ。", ephemeral=True
+                "サーバー内のチャンネルでだけ利用できるからね。そして天は鳴き、大地は震えるだろうね", ephemeral=True
             )
             return
 
         today_jst = get_today_jst_str()
-        existing = self.bot.storage.get_omikuji_today(
-            guild.id, interaction.user.id, today_jst
-        )
-        if existing is not None:
-            result_name, drawn_at = existing
-            await interaction.response.send_message(
-                f"今日はもうおみくじを引いたゾ！（本日の結果: **{result_name}** / {drawn_at}）\n"
-                "また明日（0:00 JST 以降）に引いてくれよな～頼むよ～",
-                ephemeral=True,
+        if not self.DEBUG_NO_COOLDOWN:
+            existing = self.bot.storage.get_omikuji_today(
+                guild.id, interaction.user.id, today_jst
             )
-            return
+            if existing is not None:
+                result_name, drawn_at = existing
+                await interaction.response.send_message(
+                    f"今日はもうおみくじを引いたゾ！（本日の結果: **{result_name}** / {drawn_at}）\n"
+                    "また明日（0:00 JST 以降）に引いてくれよな～頼むよ～",
+                    ephemeral=True,
+                )
+                return
 
         result = draw_omikuji()
         drawn_at = self.bot.storage.record_omikuji_draw(
             guild.id, interaction.user.id, today_jst, result.tier.name
         )
-        embed = build_omikuji_embed(interaction.user, result, drawn_at)
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(
-        name="omikuji_reset",
-        description="【デバッグ・管理用】おみくじのクールダウン（1日1回制限）をリセットします",
-    )
-    @app_commands.describe(user="リセット対象のユーザー（省略時は自分自身）")
-    @app_commands.guild_only()
-    async def omikuji_reset(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member | None = None,
-    ) -> None:
-        guild = interaction.guild
-        if guild is None:
-            await interaction.response.send_message(
-                "サーバー内のチャンネルでのみ利用できるゾ。", ephemeral=True
-            )
-            return
-
-        if not can_manage_bot(interaction.user, self.bot.storage, guild.id):
-            await interaction.response.send_message(
-                "おみくじリセットは管理者または許可された管理ロールのみ実行できるゾ。",
-                ephemeral=True,
-            )
-            return
-
-        target_user = user or interaction.user
-        removed = self.bot.storage.reset_omikuji_cooldown(guild.id, target_user.id)
-        if removed:
-            await interaction.response.send_message(
-                f"<@{target_user.id}> のおみくじクールダウンをリセットしたゾ。もう一度引けるゾ！",
-                ephemeral=True,
-            )
+        embed, image_file = build_omikuji_embed(interaction.user, result, drawn_at)
+        if image_file is not None:
+            await interaction.response.send_message(embed=embed, file=image_file)
         else:
-            await interaction.response.send_message(
-                f"<@{target_user.id}> にはリセット対象の記録がなかったゾ（すでに引ける状態だゾ）。",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: YajuBot) -> None:
