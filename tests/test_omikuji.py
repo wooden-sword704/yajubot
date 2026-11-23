@@ -17,7 +17,13 @@ from yajubot.cogs.omikuji import (
     normalize_tier_probabilities,
 )
 from yajubot.config import BotConfig
-from yajubot.omikuji_data import OMIKUJI_TIERS, OmikujiTier
+from yajubot.omikuji_data import (
+    OMIKUJI_CATEGORIES,
+    OMIKUJI_RANDOM_CATEGORIES,
+    OMIKUJI_TIERS,
+    OmikujiRandomCategory,
+    OmikujiTier,
+)
 from yajubot.storage import OWNER_USER_ID, ProxyStorage
 
 
@@ -25,6 +31,23 @@ class OmikujiTest(unittest.IsolatedAsyncioTestCase):
     def test_default_tiers_and_probability_scaling(self) -> None:
         self.assertEqual(len(OMIKUJI_TIERS), 6)
         self.assertAlmostEqual(sum(t.probability for t in OMIKUJI_TIERS), 100.0, places=2)
+        self.assertEqual(OMIKUJI_CATEGORIES, ("今日の淫夢ファミリー",))
+        self.assertEqual(
+            [rc.name for rc in OMIKUJI_RANDOM_CATEGORIES],
+            ["今日の語録", "今日の拓也県旅行"],
+        )
+
+        # デフォルト抽選ではティア連動1項目＋ティア非依存ランダム項目がすべて含まれる
+        default_res = draw_omikuji()
+        default_items = dict(default_res.items)
+        self.assertEqual(
+            list(default_items.keys()),
+            ["今日の淫夢ファミリー", "今日の語録", "今日の拓也県旅行"],
+        )
+        self.assertIn(
+            default_items["今日の淫夢ファミリー"],
+            default_res.tier.categories["今日の淫夢ファミリー"],
+        )
 
         # 合計が100でない場合は自動で合計100へスケーリングされる
         unscaled = (
@@ -41,13 +64,13 @@ class OmikujiTest(unittest.IsolatedAsyncioTestCase):
                 name="超吉",
                 color=0xFFFFFF,
                 probability=100.0,
-                categories={"願望": ("レア1", "レア2"), "商売": ("大儲け",)},
+                categories={"今日の淫夢ファミリー": ("レア1", "レア2")},
             ),
             OmikujiTier(
                 name="はずれ",
                 color=0x000000,
                 probability=0.0,
-                categories={"願望": ("なし",)},
+                categories={"今日の淫夢ファミリー": ("なし",)},
             ),
             OmikujiTier(
                 name="空ティア",
@@ -56,12 +79,21 @@ class OmikujiTest(unittest.IsolatedAsyncioTestCase):
                 categories={},
             ),
         )
+        custom_random = (
+            OmikujiRandomCategory(name="今日の語録", items=("語録1", "語録2")),
+            OmikujiRandomCategory(name="空項目", items=()),
+        )
         for _ in range(10):
-            res = draw_omikuji(custom_tiers, categories=("願望", "商売"))
+            res = draw_omikuji(
+                custom_tiers,
+                categories=("今日の淫夢ファミリー",),
+                random_categories=custom_random,
+            )
             self.assertEqual(res.tier.name, "超吉")
             items_dict = dict(res.items)
-            self.assertIn(items_dict["願望"], {"レア1", "レア2"})
-            self.assertEqual(items_dict["商売"], "大儲け")
+            self.assertIn(items_dict["今日の淫夢ファミリー"], {"レア1", "レア2"})
+            self.assertIn(items_dict["今日の語録"], {"語録1", "語録2"})
+            self.assertNotIn("空項目", items_dict)
 
     def test_jst_date_conversion(self) -> None:
         # UTC 2026-11-17 15:30:00 -> JST 2026-11-18 00:30:00
@@ -98,8 +130,10 @@ class OmikujiTest(unittest.IsolatedAsyncioTestCase):
                 interaction.response.send_message.assert_awaited_once()
                 embed = interaction.response.send_message.call_args.kwargs["embed"]
                 self.assertEqual(embed.title, "一般ユーザーのおみくじ")
-                self.assertEqual(embed.fields[0].name, "運勢")
-                self.assertTrue(len(embed.fields) >= 2)
+                self.assertEqual(
+                    [f.name for f in embed.fields],
+                    ["運勢", "今日の淫夢ファミリー", "今日の語録", "今日の拓也県旅行"],
+                )
 
                 # 2回目（同日）: 制限に引っかかる
                 interaction.response.send_message.reset_mock()

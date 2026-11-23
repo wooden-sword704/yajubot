@@ -13,7 +13,13 @@ from discord.ext import commands
 
 from yajubot.bot import YajuBot
 from yajubot.cogs.proxy import can_manage_bot
-from yajubot.omikuji_data import OMIKUJI_CATEGORIES, OMIKUJI_TIERS, OmikujiTier
+from yajubot.omikuji_data import (
+    OMIKUJI_CATEGORIES,
+    OMIKUJI_RANDOM_CATEGORIES,
+    OMIKUJI_TIERS,
+    OmikujiRandomCategory,
+    OmikujiTier,
+)
 from yajubot.storage import JST
 
 
@@ -48,8 +54,9 @@ def normalize_tier_probabilities(tiers: Sequence[OmikujiTier]) -> list[float]:
 def draw_omikuji(
     tiers: Sequence[OmikujiTier] = OMIKUJI_TIERS,
     categories: Sequence[str] = OMIKUJI_CATEGORIES,
+    random_categories: Sequence[OmikujiRandomCategory] = OMIKUJI_RANDOM_CATEGORIES,
 ) -> OmikujiDrawResult:
-    """1. 確率（合計100%へスケーリング）でティアを抽選し、2. 各項目からランダムに1つずつ選ぶ。"""
+    """1. 確率（合計100%へスケーリング）でティアを抽選し、2. ティア項目とティア非依存項目からランダムに1つずつ選ぶ。"""
     valid_tiers = [t for t in tiers if any(t.categories.values())]
     if not valid_tiers:
         raise ValueError("有効なおみくじティア・選択肢が1つも登録されていません。")
@@ -68,6 +75,11 @@ def draw_omikuji(
         pool = selected_tier.categories.get(key)
         if pool:
             chosen_items.append((key, random.choice(pool)))
+
+    # ティアに関係なくランダムに選ばれる項目を抽選
+    for random_cat in random_categories:
+        if random_cat.items:
+            chosen_items.append((random_cat.name, random.choice(random_cat.items)))
 
     return OmikujiDrawResult(
         tier=selected_tier,
