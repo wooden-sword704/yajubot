@@ -971,7 +971,7 @@ class RouletteCog(commands.Cog):
         )
 
     @app_commands.command(
-        name="admin roulette",
+        name="admin-roulette",
         description="サーバー内の全ルーレットを管理するゾ。多分管理者専用だと思うんですけど（名推理）",
     )
     @app_commands.guild_only()
