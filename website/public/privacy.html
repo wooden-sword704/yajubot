@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>プライバシーポリシー - サーバー管理青年アキラ</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-inner">
+      <a href="index.html" class="brand">
+        <span class="brand-badge">Y</span>
+        <span>サーバー管理青年アキラ</span>
+      </a>
+      <button class="menu-toggle" aria-label="メニューを開く" aria-expanded="false">☰</button>
+      <nav class="nav-links">
+        <a href="index.html">ホーム</a>
+        <a href="index.html#features">できること</a>
+        <a href="terms.html">利用規約</a>
+        <a href="privacy.html" class="active">プライバシーポリシー</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="legal-wrapper">
+    <div class="container">
+      <article class="legal-card">
+        <h1>プライバシーポリシー</h1>
+        <p class="legal-updated">最終更新日: 2026年11月24日</p>
+
+        <div class="legal-notice">
+          <strong>本ページの読み方について:</strong><br />
+          各項目には分かりやすさ重視の「ガバガバ解説」を載せていますが、法的・正式な効力を持つのは折りたたまれた「正式なポリシー文」です。万が一、ガバガバ解説と正式なポリシー文の内容に矛盾や食い違いがある場合は、<strong>正式なポリシー文が優先されます</strong>。
+        </div>
+
+        <section class="legal-section">
+          <h2>第1条（取得する情報）</h2>
+          <div class="gaba-note">
+            <span class="gaba-label">ガバガバ解説</span>
+            <p>コマンドを動かすために、ユーザーIDやサーバーID、翻訳したいテキストなどを一時的に受け取ります。パスワードとか個人情報は取りません。</p>
+          </div>
+          <details class="formal-details">
+            <summary>正式なポリシー文を読む</summary>
+            <p>本ボットは、各機能の提供および安定した運用のため、Discord APIを通じて以下の情報を取得・処理する場合があります。</p>
+            <ul>
+              <li><strong>識別子情報:</strong> DiscordのユーザーID、サーバー（ギルド）ID、チャンネルID、メッセージID</li>
+              <li><strong>コマンド入力内容:</strong> スラッシュコマンドの引数や、翻訳対象として指定されたテキストデータ</li>
+              <li><strong>システムログ:</strong> コマンドの実行日時、エラー発生時のスタックトレースおよび動作状況に関する技術情報</li>
+            </ul>
+            <p>※ 本ボットは、ユーザーのメールアドレス、パスワード、決済情報等の機微な個人情報を直接収集することはありません。</p>
+          </details>
+        </section>
+
+        <section class="legal-section">
+          <h2>第2条（情報の利用目的）</h2>
+          <div class="gaba-note">
+            <span class="gaba-label">ガバガバ解説</span>
+            <p>受け取った情報は、コマンドの返事を作ったり、バグを直したり、荒らし対策をしたりするためだけに使います。</p>
+          </div>
+          <details class="formal-details">
+            <summary>正式なポリシー文を読む</summary>
+            <p>取得した情報は、以下の目的の範囲内でのみ利用し、目的外の利用は行いません。</p>
+            <ul>
+              <li>翻訳結果の生成、おみくじ結果の抽選など、本ボットの各機能を提供するため</li>
+              <li>コマンドの応答を正しいチャンネル・ユーザーへ返却するため</li>
+              <li>不具合の原因調査、パフォーマンス改善およびサービス品質の向上のため</li>
+              <li>スパムや不正利用の検知・防止、および利用規約違反への対応のため</li>
+            </ul>
+          </details>
+        </section>
+
+        <section class="legal-section">
+          <h2>第3条（データの保存期間と破棄）</h2>
+          <div class="gaba-note">
+            <span class="gaba-label">ガバガバ解説</span>
+            <p>翻訳した文章とかは処理が終わったらすぐ忘れます（保存しません）。エラーログだけはデバッグのために少しの間残すことがあります。</p>
+          </div>
+          <details class="formal-details">
+            <summary>正式なポリシー文を読む</summary>
+            <p>1. コマンド処理のために一時的に受け取ったメッセージ本文および翻訳対象テキストは、応答の生成・送信が完了した時点でメモリ上から速やかに破棄され、データベース等に永続的に保存されることはありません。</p>
+            <p>2. エラーログ等の技術情報は、障害対応およびセキュリティ維持に必要な期間に限り保持し、不要となった時点で適切に削除します。</p>
+          </details>
+        </section>
+
+        <section class="legal-section">
+          <h2>第4条（第三者提供および外部サービス連携）</h2>
+          <div class="gaba-note">
+            <span class="gaba-label">ガバガバ解説</span>
+            <p>集めた情報を勝手に他人に売ったり渡したりはしません。ただし、翻訳機能を使うときは翻訳用の外部APIにテキストを送ります。</p>
+          </div>
+          <details class="formal-details">
+            <summary>正式なポリシー文を読む</summary>
+            <p>1. 開発者は、法令に基づく開示請求があった場合を除き、ユーザーの事前の同意なく取得した情報を第三者に販売、貸与または提供することはありません。</p>
+            <p>2. 本ボットは、翻訳機能等の実現のため、外部のAPIサービス（翻訳エンジン等）へ必要なテキストデータを送信する場合があります。これらの外部サービスにおけるデータの取り扱いは、各サービス提供者のプライバシーポリシーに従います。</p>
+          </details>
+        </section>
+
+        <section class="legal-section">
+          <h2>第5条（安全管理措置）</h2>
+          <div class="gaba-note">
+            <span class="gaba-label">ガバガバ解説</span>
+            <p>データが漏れたり勝手に書き換えられたりしないよう、できる範囲でちゃんと鍵をかけて管理しています。</p>
+          </div>
+          <details class="formal-details">
+            <summary>正式なポリシー文を読む</summary>
+            <p>開発者は、取り扱う情報の漏洩、滅失または毀損の防止その他の安全管理のため、アクセス制御、通信の暗号化、認証情報の適切な管理など、合理的な技術的および管理的措置を講じます。</p>
+          </details>
+        </section>
+
+        <section class="legal-section">
+          <h2>第6条（データの削除・お問い合わせ）</h2>
+          <div class="gaba-note">
+            <span class="gaba-label">ガバガバ解説</span>
+            <p>ボットをサーバーからKickすればそれ以降はデータを取りません。何かあれば開発者に連絡してください。</p>
+          </div>
+          <details class="formal-details">
+            <summary>正式なポリシー文を読む</summary>
+            <p>1. ユーザーまたはサーバー管理者は、本ボットをDiscordサーバーから削除（Kick/Ban）することにより、当該サーバーからの情報取得を直ちに停止させることができます。</p>
+            <p>2. 保持されているログデータの削除や、本ポリシーに関するお問い合わせについては、開発者が別途案内する連絡手段（サポートサーバーまたはGitHubリポジトリ等）よりご連絡ください。</p>
+          </details>
+        </section>
+
+        <section class="legal-section">
+          <h2>第7条（ポリシーの変更）</h2>
+          <div class="gaba-note">
+            <span class="gaba-label">ガバガバ解説</span>
+            <p>内容を変えるときはこのページを更新します。</p>
+          </div>
+          <details class="formal-details">
+            <summary>正式なポリシー文を読む</summary>
+            <p>開発者は、法令の改正や本ボットの機能追加・変更に伴い、本プライバシーポリシーを随時改定できるものとします。改定後のポリシーは、本ウェブサイトに掲載した時点から効力を生じるものとします。</p>
+          </details>
+        </section>
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p>&copy; 2026 Yajubot</p>
+      <div class="footer-links">
+        <a href="terms.html">利用規約</a>
+        <a href="privacy.html">プライバシーポリシー</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
