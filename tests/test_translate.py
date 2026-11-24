@@ -13,12 +13,15 @@ from yajubot.bot import YajuBot
 from yajubot.cogs.translate import MAX_TRANSLATE_LENGTH, TranslateCog
 from yajubot.config import BotConfig
 from yajubot.translator import (
+    MINOR_LANGUAGE_POOL,
     MYMEMORY_MAX_QUERY_CHARS,
     FallbackTranslator,
     GoogleUnofficialTranslator,
     MyMemoryTranslator,
     TranslationError,
+    build_random_route,
     gabagaba_translate,
+    preprocess_for_gabagaba,
 )
 
 
@@ -139,6 +142,7 @@ class TranslatorBackendTest(unittest.IsolatedAsyncioTestCase):
             "元文",
             StubBackend(),
             route=("ja", "th", "ru", "ja"),
+            preprocess=False,
         )
         self.assertEqual(result, "元文->th->ru->ja")
         self.assertEqual(
@@ -149,6 +153,20 @@ class TranslatorBackendTest(unittest.IsolatedAsyncioTestCase):
                 ("元文->th->ru", "ru", "ja"),
             ],
         )
+
+    def test_preprocess_for_gabagaba_hiragana_and_no_punctuation(self) -> None:
+        result = preprocess_for_gabagaba("今日は、いい天気ですね！テスト。")
+        self.assertEqual(result, "こんにちはいいてんきですねてすと")
+
+    def test_build_random_route(self) -> None:
+        route = build_random_route(count=5)
+        self.assertEqual(len(route), 7)
+        self.assertEqual(route[0], "ja")
+        self.assertEqual(route[-1], "ja")
+        middle = route[1:-1]
+        self.assertEqual(len(set(middle)), 5)
+        for lang in middle:
+            self.assertIn(lang, MINOR_LANGUAGE_POOL)
 
     async def test_gabagaba_translate_validation(self) -> None:
         backend = MagicMock()
@@ -191,7 +209,7 @@ class TranslateCogTest(unittest.IsolatedAsyncioTestCase):
         bot = YajuBot(BotConfig(token="dummy-token"))
         try:
             backend = MagicMock()
-            backend.translate = AsyncMock(side_effect=["step1", "step2", "ガバガバ結果"])
+            backend.translate = AsyncMock(return_value="ガバガバ結果")
             cog = TranslateCog(bot, translator=backend)
 
             interaction = self._make_interaction()
@@ -213,7 +231,7 @@ class TranslateCogTest(unittest.IsolatedAsyncioTestCase):
         bot = YajuBot(BotConfig(token="dummy-token"))
         try:
             backend = MagicMock()
-            backend.translate = AsyncMock(side_effect=["a", "b", "翻訳済み"])
+            backend.translate = AsyncMock(return_value="翻訳済み")
             cog = TranslateCog(bot, translator=backend)
 
             # 正常系

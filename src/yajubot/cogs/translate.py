@@ -11,7 +11,6 @@ from discord.ext import commands
 
 from yajubot.bot import YajuBot
 from yajubot.translator import (
-    DEFAULT_TRANSLATION_ROUTE,
     FallbackTranslator,
     GoogleUnofficialTranslator,
     MyMemoryTranslator,
@@ -83,7 +82,7 @@ class TranslateCog(commands.Cog):
 
         if len(cleaned) > MAX_TRANSLATE_LENGTH:
             await interaction.response.send_message(
-                f"長すぎィ！（{MAX_TRANSLATE_LENGTH}文字以内の文章にしてくれよな～）",
+                f"長スギィ！（{MAX_TRANSLATE_LENGTH}文字以内の文章にしてくれよな～）",
                 ephemeral=True,
             )
             return
@@ -94,7 +93,6 @@ class TranslateCog(commands.Cog):
             translated = await gabagaba_translate(
                 cleaned,
                 self._translator,
-                route=DEFAULT_TRANSLATION_ROUTE,
             )
         except TranslationError as exc:
             logger.warning("ガバガバ翻訳に失敗しました: %s", exc)
@@ -120,7 +118,7 @@ class TranslateCog(commands.Cog):
 
     @app_commands.command(
         name="translate",
-        description="入力した日本語をガバガバ逆翻訳する",
+        description="ガバガバ翻訳をする",
     )
     @app_commands.describe(text="ガバガバ翻訳したい日本語テキスト")
     @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)

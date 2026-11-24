@@ -3,23 +3,64 @@
 from __future__ import annotations
 
 import logging
+import random
+import re
 from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
 import aiohttp
+import pykakasi
 
 logger = logging.getLogger(__name__)
 
-# 逆翻訳の経由言語ルート（先頭から末尾へ順に翻訳する）
-# のちにガバガバ具合や速度を見ながら言語コードを追加・変更して調整可能。
-# 例:
-#   ("ja", "en", "ja")                -> 軽め・高速
-#   ("ja", "th", "ru", "ja")          -> 3ステップ・語順/文字体系差で崩れやすい
-#   ("ja", "zu", "fi", "mn", "ja")    -> 4ステップ・さらに崩壊（マイナー言語含む）
-DEFAULT_TRANSLATION_ROUTE: tuple[str, ...] = ("ja", "th", "ru", "ja")
+# ランダム逆翻訳で使用するマイナー言語プール（文字体系・語順・低リソース度が高い言語群）
+MINOR_LANGUAGE_POOL: tuple[str, ...] = (
+    "la",   # ラテン語
+    "am",   # アムハラ語
+    "km",   # クメール語
+    "ay",   # アイマラ語
+    "gn",   # グアラニー語
+    "dv",   # ディベヒ語
+    "ti",   # ティグリニャ語
+    "eo",   # エスペラント
+    "zu",   # ズールー語
+    "mn",   # モンゴル語
+    "ht",   # ハイチ・クレオール語
+    "yi",   # イディッシュ語
+    "haw",  # ハワイ語
+    "sm",   # サモア語
+    "mg",   # マダガスカル語
+    "sn",   # ショナ語
+    "xh",   # コサ語
+    "mi",   # マオリ語
+)
+DEFAULT_RELAY_COUNT: int = 4
 
 DEFAULT_TIMEOUT_SECONDS: float = 10.0
 MYMEMORY_MAX_QUERY_CHARS: int = 500
+
+_KAKASI = pykakasi.kakasi()
+_PUNCTUATION_RE = re.compile(
+    r"[、。，．,.!！?？…・「」『』（）()［］\[\]【】｛｝{}〈〉《》〜~]+"
+)
+
+
+def preprocess_for_gabagaba(text: str) -> str:
+    """日本語テキストをローカルでひらがな化し、句読点を削除して誤訳を誘発する。"""
+    converted = "".join(item["hira"] for item in _KAKASI.convert(text))
+    stripped = _PUNCTUATION_RE.sub("", converted)
+    normalized = re.sub(r"\s+", " ", stripped).strip()
+    return normalized or text.strip()
+
+
+def build_random_route(
+    pool: Sequence[str] = MINOR_LANGUAGE_POOL,
+    count: int = DEFAULT_RELAY_COUNT,
+) -> tuple[str, ...]:
+    """言語プールからランダムに指定数を選び、`ja -> ... -> ja` のルートを生成する。"""
+    k = max(1, min(count, len(pool)))
+    selected = random.sample(list(pool), k=k)
+    return ("ja", *selected, "ja")
 
 
 class TranslationError(RuntimeError):
@@ -187,17 +228,20 @@ async def gabagaba_translate(
     text: str,
     backend: TranslatorBackend,
     *,
-    route: Sequence[str] = DEFAULT_TRANSLATION_ROUTE,
+    route: Sequence[str] | None = None,
+    preprocess: bool = True,
 ) -> str:
-    """指定された言語ルートに沿って多段階逆翻訳を実行する。"""
+    """指定された言語ルート（省略時はランダム）に沿って多段階逆翻訳を実行する。"""
     cleaned = text.strip()
     if not cleaned:
         raise TranslationError("翻訳対象のテキストが空です。")
-    if len(route) < 2:
+
+    active_route = build_random_route() if route is None else tuple(route)
+    if len(active_route) < 2:
         raise ValueError("route には少なくとも2つの言語コード（開始・終了）が必要です。")
 
-    current = cleaned
-    for source, target in zip(route, route[1:]):
+    current = preprocess_for_gabagaba(cleaned) if preprocess else cleaned
+    for source, target in zip(active_route, active_route[1:]):
         if source == target:
             continue
         current = await backend.translate(current, source, target)

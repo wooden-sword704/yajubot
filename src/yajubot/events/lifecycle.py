@@ -3,13 +3,30 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from yajubot.bot import YajuBot
 
 logger = logging.getLogger(__name__)
+
+
+def format_status_uptime(started_at: datetime, now: datetime | None = None) -> str:
+    """ステータス表示用の稼働時間文字列を返す（分単位）。"""
+    current = now or datetime.now(timezone.utc)
+    total_minutes = max(0, int((current - started_at).total_seconds()) // 60)
+    days, rem = divmod(total_minutes, 1440)
+    hours, minutes = divmod(rem, 60)
+
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}日")
+    if hours or parts:
+        parts.append(f"{hours}時間")
+    parts.append(f"{minutes}分")
+    return " ".join(parts)
 
 
 class LifecycleEvents(commands.Cog):
@@ -18,6 +35,30 @@ class LifecycleEvents(commands.Cog):
     def __init__(self, bot: YajuBot) -> None:
         self.bot = bot
         self._initialized = False
+
+    async def cog_unload(self) -> None:
+        if self._status_task.is_running():
+            self._status_task.cancel()
+
+    async def _update_presence(self) -> None:
+        uptime = format_status_uptime(self.bot.started_at)
+        try:
+            await self.bot.change_presence(
+                activity=discord.Activity(
+                    type=discord.ActivityType.watching,
+                    name=f"/help | {uptime}",
+                )
+            )
+        except discord.HTTPException:
+            logger.debug("ステータスの更新に失敗しました。", exc_info=True)
+
+    @tasks.loop(minutes=1)
+    async def _status_task(self) -> None:
+        await self._update_presence()
+
+    @_status_task.before_loop
+    async def _before_status_task(self) -> None:
+        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
@@ -47,12 +88,9 @@ class LifecycleEvents(commands.Cog):
                     target_guild_id,
                     joined,
                 )
-            await self.bot.change_presence(
-                activity=discord.Activity(
-                    type=discord.ActivityType.watching,
-                    name="/help",
-                )
-            )
+            await self._update_presence()
+            if not self._status_task.is_running():
+                self._status_task.start()
         else:
             logger.info("Gateway に再接続しました: %s", user)
 
