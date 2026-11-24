@@ -97,6 +97,9 @@ class GuildSettings:
     log_channel_id: int | None = None
     binjou_channel_ids: tuple[int, ...] = ()
     binjou_probability: float = 5.0
+    stage_mod_role_ids: tuple[int, ...] = ()
+    self_assignable_role_ids: tuple[int, ...] = ()
+    tadocoin_excluded_channel_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,11 +164,21 @@ class ProxyStorage:
         *,
         cipher: LogCipher | None = None,
         max_records: int = DEFAULT_MAX_RECORDS,
+        role_backup_path: Path | str | None = None,
     ) -> None:
         self._db_path_str = str(db_path)
         self._is_memory = self._db_path_str == ":memory:"
         if not self._is_memory:
             Path(self._db_path_str).parent.mkdir(parents=True, exist_ok=True)
+
+        if role_backup_path is not None:
+            self._role_backup_path: Path | None = Path(role_backup_path)
+        elif not self._is_memory:
+            self._role_backup_path = (
+                Path(self._db_path_str).parent / "role_toggle_backup.json"
+            )
+        else:
+            self._role_backup_path = None
 
         self._cipher = cipher or LogCipher(
             key_path=None if self._is_memory else DEFAULT_KEY_PATH
@@ -175,6 +188,7 @@ class ProxyStorage:
         self._conn = sqlite3.connect(self._db_path_str, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
+        self._auto_restore_role_backup_if_empty()
 
     def _init_schema(self) -> None:
         with self._lock:
@@ -222,7 +236,10 @@ class ProxyStorage:
                     admin_role_ids TEXT NOT NULL DEFAULT '[]',
                     log_channel_id INTEGER,
                     binjou_channel_ids TEXT NOT NULL DEFAULT '[]',
-                    binjou_probability REAL NOT NULL DEFAULT 5.0
+                    binjou_probability REAL NOT NULL DEFAULT 5.0,
+                    stage_mod_role_ids TEXT NOT NULL DEFAULT '[]',
+                    self_assignable_role_ids TEXT NOT NULL DEFAULT '[]',
+                    tadocoin_excluded_channel_ids TEXT NOT NULL DEFAULT '[]'
                 );
                 """
             )
@@ -241,6 +258,64 @@ class ProxyStorage:
                 cur.execute(
                     "ALTER TABLE guild_settings ADD COLUMN binjou_probability REAL NOT NULL DEFAULT 5.0;"
                 )
+            if "stage_mod_role_ids" not in cols:
+                cur.execute(
+                    "ALTER TABLE guild_settings ADD COLUMN stage_mod_role_ids TEXT NOT NULL DEFAULT '[]';"
+                )
+            if "self_assignable_role_ids" not in cols:
+                cur.execute(
+                    "ALTER TABLE guild_settings ADD COLUMN self_assignable_role_ids TEXT NOT NULL DEFAULT '[]';"
+                )
+            if "tadocoin_excluded_channel_ids" not in cols:
+                cur.execute(
+                    "ALTER TABLE guild_settings ADD COLUMN tadocoin_excluded_channel_ids TEXT NOT NULL DEFAULT '[]';"
+                )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_toggleable_roles (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    role_id INTEGER NOT NULL,
+                    PRIMARY KEY (guild_id, user_id, role_id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tadocoin_balances (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    balance INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (guild_id, user_id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tadocoin_leaderboard
+                ON tadocoin_balances(guild_id, balance DESC);
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS shinkei_records (
+                    guild_id INTEGER NOT NULL,
+                    difficulty TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    best_time_sec REAL NOT NULL,
+                    moves INTEGER NOT NULL,
+                    achieved_at TEXT NOT NULL,
+                    PRIMARY KEY (guild_id, difficulty, user_id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_shinkei_best_time
+                ON shinkei_records(guild_id, difficulty, best_time_sec ASC);
+                """
+            )
 
             cur.execute(
                 """
@@ -317,7 +392,7 @@ class ProxyStorage:
     def get_guild_settings(self, guild_id: int) -> GuildSettings:
         with self._lock:
             row = self._conn.execute(
-                "SELECT proxy_role_ids, admin_role_ids, log_channel_id, binjou_channel_ids, binjou_probability FROM guild_settings WHERE guild_id = ?",
+                "SELECT proxy_role_ids, admin_role_ids, log_channel_id, binjou_channel_ids, binjou_probability, stage_mod_role_ids, self_assignable_role_ids, tadocoin_excluded_channel_ids FROM guild_settings WHERE guild_id = ?",
                 (guild_id,),
             ).fetchone()
         if row is None:
@@ -339,6 +414,22 @@ class ProxyStorage:
             binjou_prob = float(row["binjou_probability"])
         except (ValueError, TypeError):
             binjou_prob = 5.0
+        try:
+            stage_mod_ids = tuple(int(r) for r in json.loads(row["stage_mod_role_ids"]))
+        except (ValueError, TypeError):
+            stage_mod_ids = ()
+        try:
+            self_assignable_ids = tuple(
+                int(r) for r in json.loads(row["self_assignable_role_ids"])
+            )
+        except (ValueError, TypeError):
+            self_assignable_ids = ()
+        try:
+            tadocoin_excluded_ids = tuple(
+                int(c) for c in json.loads(row["tadocoin_excluded_channel_ids"])
+            )
+        except (ValueError, TypeError):
+            tadocoin_excluded_ids = ()
         return GuildSettings(
             guild_id=guild_id,
             proxy_role_ids=proxy_ids,
@@ -346,6 +437,9 @@ class ProxyStorage:
             log_channel_id=log_channel_id,
             binjou_channel_ids=binjou_ids,
             binjou_probability=binjou_prob,
+            stage_mod_role_ids=stage_mod_ids,
+            self_assignable_role_ids=self_assignable_ids,
+            tadocoin_excluded_channel_ids=tadocoin_excluded_ids,
         )
 
     def set_log_channel(
@@ -418,6 +512,366 @@ class ProxyStorage:
             )
             self._conn.commit()
         return self.get_guild_settings(guild_id)
+
+    def set_stage_mod_roles(self, guild_id: int, role_ids: list[int]) -> GuildSettings:
+        serialized = json.dumps(sorted(set(int(r) for r in role_ids)))
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, stage_mod_role_ids)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET stage_mod_role_ids = excluded.stage_mod_role_ids
+                """,
+                (guild_id, serialized),
+            )
+            self._conn.commit()
+        return self.get_guild_settings(guild_id)
+
+    def set_self_assignable_roles(self, guild_id: int, role_ids: list[int]) -> GuildSettings:
+        serialized = json.dumps(sorted(set(int(r) for r in role_ids)))
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, self_assignable_role_ids)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET self_assignable_role_ids = excluded.self_assignable_role_ids
+                """,
+                (guild_id, serialized),
+            )
+            self._conn.commit()
+            self._sync_role_toggle_backup_locked(overwrite_guild_settings_id=guild_id)
+        return self.get_guild_settings(guild_id)
+
+    def get_user_toggleable_roles(self, guild_id: int, user_id: int) -> set[int]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT role_id FROM user_toggleable_roles WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            ).fetchall()
+        return {int(row["role_id"]) for row in rows}
+
+    def record_user_toggleable_roles(
+        self, guild_id: int, user_id: int, role_ids: list[int] | set[int]
+    ) -> None:
+        if not role_ids:
+            return
+        with self._lock:
+            cur = self._conn.executemany(
+                """
+                INSERT OR IGNORE INTO user_toggleable_roles (guild_id, user_id, role_id)
+                VALUES (?, ?, ?)
+                """,
+                [(guild_id, user_id, int(rid)) for rid in role_ids],
+            )
+            inserted = cur.rowcount
+            self._conn.commit()
+            if inserted:
+                self._sync_role_toggle_backup_locked()
+
+    def _load_role_backup_raw(self) -> dict[str, dict]:
+        if self._role_backup_path is None or not self._role_backup_path.exists():
+            return {"guilds": {}}
+        try:
+            data = json.loads(self._role_backup_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("guilds"), dict):
+                return data
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("非暗号化ロールバックアップの読み込みに失敗しました: %s", exc)
+        return {"guilds": {}}
+
+    def _sync_role_toggle_backup_locked(
+        self, *, overwrite_guild_settings_id: int | None = None
+    ) -> None:
+        """ロール付け外し設定と対象ユーザー履歴を非暗号化 JSON に同期する。"""
+        if self._role_backup_path is None:
+            return
+        backup = self._load_role_backup_raw()
+        guilds_map: dict[str, dict] = backup.setdefault("guilds", {})
+
+        for row in self._conn.execute(
+            "SELECT guild_id, self_assignable_role_ids FROM guild_settings"
+        ).fetchall():
+            gid = int(row["guild_id"])
+            gid_key = str(gid)
+            entry = guilds_map.setdefault(gid_key, {})
+            try:
+                db_roles = sorted(
+                    {int(r) for r in json.loads(row["self_assignable_role_ids"])}
+                )
+            except (ValueError, TypeError):
+                db_roles = []
+            if gid == overwrite_guild_settings_id or db_roles:
+                entry["self_assignable_role_ids"] = db_roles
+            else:
+                entry.setdefault("self_assignable_role_ids", [])
+            entry.setdefault("users", {})
+
+        for row in self._conn.execute(
+            "SELECT guild_id, user_id, role_id FROM user_toggleable_roles"
+        ).fetchall():
+            gid_key = str(int(row["guild_id"]))
+            uid_key = str(int(row["user_id"]))
+            rid = int(row["role_id"])
+            entry = guilds_map.setdefault(
+                gid_key, {"self_assignable_role_ids": [], "users": {}}
+            )
+            users_map = entry.setdefault("users", {})
+            existing = set(int(x) for x in users_map.get(uid_key, []))
+            existing.add(rid)
+            users_map[uid_key] = sorted(existing)
+
+        self._role_backup_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self._role_backup_path.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(backup, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, self._role_backup_path)
+
+    def _auto_restore_role_backup_if_empty(self) -> None:
+        if self._role_backup_path is None or not self._role_backup_path.exists():
+            return
+        with self._lock:
+            has_any = self._conn.execute(
+                "SELECT 1 FROM user_toggleable_roles LIMIT 1"
+            ).fetchone()
+        if has_any is None:
+            restored_guilds, restored_entries = self.restore_role_toggle_backup()
+            if restored_guilds or restored_entries:
+                logger.info(
+                    "非暗号化バックアップからロール履歴を自動復元しました (guilds=%d, entries=%d)",
+                    restored_guilds,
+                    restored_entries,
+                )
+
+    def restore_role_toggle_backup(
+        self, guild_id: int | None = None
+    ) -> tuple[int, int]:
+        """非暗号化バックアップからロール付け外し設定・ユーザー履歴を復元する。"""
+        if self._role_backup_path is None or not self._role_backup_path.exists():
+            return (0, 0)
+
+        backup = self._load_role_backup_raw()
+        guilds_map = backup.get("guilds", {})
+        restored_guilds = 0
+        restored_entries = 0
+
+        with self._lock:
+            for gid_key, gdata in guilds_map.items():
+                try:
+                    gid = int(gid_key)
+                except (ValueError, TypeError):
+                    continue
+                if guild_id is not None and gid != guild_id:
+                    continue
+                if not isinstance(gdata, dict):
+                    continue
+
+                raw_self_roles = gdata.get("self_assignable_role_ids", [])
+                if isinstance(raw_self_roles, list) and raw_self_roles:
+                    row = self._conn.execute(
+                        "SELECT self_assignable_role_ids FROM guild_settings WHERE guild_id = ?",
+                        (gid,),
+                    ).fetchone()
+                    current_roles: list[int] = []
+                    if row is not None:
+                        try:
+                            current_roles = json.loads(row["self_assignable_role_ids"])
+                        except (ValueError, TypeError):
+                            current_roles = []
+                    if not current_roles:
+                        serialized = json.dumps(
+                            sorted({int(r) for r in raw_self_roles})
+                        )
+                        self._conn.execute(
+                            """
+                            INSERT INTO guild_settings (guild_id, self_assignable_role_ids)
+                            VALUES (?, ?)
+                            ON CONFLICT(guild_id) DO UPDATE SET self_assignable_role_ids = excluded.self_assignable_role_ids
+                            """,
+                            (gid, serialized),
+                        )
+                        restored_guilds += 1
+
+                users_map = gdata.get("users", {})
+                if isinstance(users_map, dict):
+                    for uid_key, rids in users_map.items():
+                        try:
+                            uid = int(uid_key)
+                        except (ValueError, TypeError):
+                            continue
+                        if not isinstance(rids, list):
+                            continue
+                        for rid in rids:
+                            try:
+                                rid_int = int(rid)
+                            except (ValueError, TypeError):
+                                continue
+                            cur = self._conn.execute(
+                                """
+                                INSERT OR IGNORE INTO user_toggleable_roles (guild_id, user_id, role_id)
+                                VALUES (?, ?, ?)
+                                """,
+                                (gid, uid, rid_int),
+                            )
+                            if cur.rowcount and cur.rowcount > 0:
+                                restored_entries += 1
+            self._conn.commit()
+        return (restored_guilds, restored_entries)
+
+    def set_tadocoin_excluded_channels(
+        self, guild_id: int, channel_ids: list[int]
+    ) -> GuildSettings:
+        serialized = json.dumps(sorted(set(int(c) for c in channel_ids)))
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, tadocoin_excluded_channel_ids)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET tadocoin_excluded_channel_ids = excluded.tadocoin_excluded_channel_ids
+                """,
+                (guild_id, serialized),
+            )
+            self._conn.commit()
+        return self.get_guild_settings(guild_id)
+
+    # --- タドコイン & リーダーボード ---
+
+    def get_tadocoin_balance(self, guild_id: int, user_id: int) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT balance FROM tadocoin_balances WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            ).fetchone()
+        return int(row["balance"]) if row is not None else 0
+
+    def add_tadocoin(self, guild_id: int, user_id: int, delta: int) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT balance FROM tadocoin_balances WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            ).fetchone()
+            current = int(row["balance"]) if row is not None else 0
+            new_balance = max(0, current + int(delta))
+            self._conn.execute(
+                """
+                INSERT INTO tadocoin_balances (guild_id, user_id, balance)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id, user_id) DO UPDATE SET balance = excluded.balance
+                """,
+                (guild_id, user_id, new_balance),
+            )
+            self._conn.commit()
+        return new_balance
+
+    def set_tadocoin(self, guild_id: int, user_id: int, amount: int) -> int:
+        new_balance = max(0, int(amount))
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO tadocoin_balances (guild_id, user_id, balance)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id, user_id) DO UPDATE SET balance = excluded.balance
+                """,
+                (guild_id, user_id, new_balance),
+            )
+            self._conn.commit()
+        return new_balance
+
+    def try_spend_tadocoin(
+        self, guild_id: int, user_id: int, amount: int
+    ) -> tuple[bool, int]:
+        cost = int(amount)
+        if cost <= 0:
+            return False, self.get_tadocoin_balance(guild_id, user_id)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT balance FROM tadocoin_balances WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            ).fetchone()
+            current = int(row["balance"]) if row is not None else 0
+            if current < cost:
+                return False, current
+            new_balance = current - cost
+            self._conn.execute(
+                """
+                INSERT INTO tadocoin_balances (guild_id, user_id, balance)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id, user_id) DO UPDATE SET balance = excluded.balance
+                """,
+                (guild_id, user_id, new_balance),
+            )
+            self._conn.commit()
+        return True, new_balance
+
+    def get_tadocoin_leaderboard(
+        self, guild_id: int, *, limit: int = 10
+    ) -> list[tuple[int, int]]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT user_id, balance
+                FROM tadocoin_balances
+                WHERE guild_id = ? AND balance > 0
+                ORDER BY balance DESC, user_id ASC
+                LIMIT ?
+                """,
+                (guild_id, limit),
+            ).fetchall()
+        return [(int(r["user_id"]), int(r["balance"])) for r in rows]
+
+    def record_shinkei_clear(
+        self,
+        guild_id: int,
+        difficulty: str,
+        user_id: int,
+        elapsed_sec: float,
+        moves: int,
+    ) -> bool:
+        """神経衰弱のクリアタイムを記録し、自己ベスト更新なら True を返す。"""
+        now_str = _now_jst_str()
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT best_time_sec FROM shinkei_records
+                WHERE guild_id = ? AND difficulty = ? AND user_id = ?
+                """,
+                (guild_id, difficulty, user_id),
+            ).fetchone()
+            if row is not None and float(row["best_time_sec"]) <= elapsed_sec:
+                return False
+            self._conn.execute(
+                """
+                INSERT INTO shinkei_records (guild_id, difficulty, user_id, best_time_sec, moves, achieved_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(guild_id, difficulty, user_id) DO UPDATE SET
+                    best_time_sec = excluded.best_time_sec,
+                    moves = excluded.moves,
+                    achieved_at = excluded.achieved_at
+                """,
+                (guild_id, difficulty, user_id, float(elapsed_sec), int(moves), now_str),
+            )
+            self._conn.commit()
+        return True
+
+    def get_shinkei_leaderboard(
+        self, guild_id: int, difficulty: str, *, limit: int = 10
+    ) -> list[tuple[int, float, int]]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT user_id, best_time_sec, moves
+                FROM shinkei_records
+                WHERE guild_id = ? AND difficulty = ?
+                ORDER BY best_time_sec ASC, moves ASC
+                LIMIT ?
+                """,
+                (guild_id, difficulty, limit),
+            ).fetchall()
+        return [
+            (int(r["user_id"]), float(r["best_time_sec"]), int(r["moves"]))
+            for r in rows
+        ]
 
     # --- プロキシメッセージ履歴＆暗号化ログ ---
 

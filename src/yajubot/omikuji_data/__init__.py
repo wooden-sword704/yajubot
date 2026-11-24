@@ -54,7 +54,7 @@ OMIKUJI_TIERS: tuple[OmikujiTier, ...] = (
     OmikujiTier(
         name="# お　お　あ　た　り",
         color=0xFF69B4,
-        probability=1,        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["おおあたり"]},
+        probability=0.5,        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["おおあたり"]},
     ),
     OmikujiTier(
         name="ビリー兄貴級",

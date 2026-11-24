@@ -91,6 +91,23 @@ from pathlib import Path
 
 OMIKUJI_IMAGES_DIR = Path(__file__).resolve().parent.parent / "omikuji_data" / "images"
 
+OMIKUJI_TADOCOIN_RULES: tuple[tuple[str, int], ...] = (
+    ("お　お　あ　た　り", 3000),
+    ("ビリー兄貴級", 300),
+    ("野獣先輩級", 150),
+    ("MUR大先輩級", 100),
+    ("拓也さん級", 50),
+    ("お　お　は　ず　れ", -200),
+)
+
+
+def get_omikuji_tadocoin_delta(tier_name: str) -> int:
+    """おみくじのティアに応じたタドコイン増減量を返す。"""
+    for keyword, delta in OMIKUJI_TADOCOIN_RULES:
+        if keyword in tier_name:
+            return delta
+    return 0
+
 
 def _get_tier_image_path(tier_name: str) -> Path | None:
     if "お　お　は　ず　れ" in tier_name:
@@ -104,6 +121,9 @@ def build_omikuji_embed(
     user: discord.abc.User,
     result: OmikujiDrawResult,
     drawn_at: str,
+    *,
+    tadocoin_delta: int = 0,
+    tadocoin_balance: int | None = None,
 ) -> tuple[discord.Embed, discord.File | None]:
     """おみくじ結果表示用の Embed と添付画像を生成する。"""
     embed = discord.Embed(
@@ -113,6 +133,19 @@ def build_omikuji_embed(
     )
     for category, value in result.items:
         embed.add_field(name=category, value=value, inline=False)
+
+    if tadocoin_delta != 0 or tadocoin_balance is not None:
+        sign = "+" if tadocoin_delta >= 0 else ""
+        bal_text = (
+            f"（現在: **{tadocoin_balance:,}** <:TADOCOIN_TEMP:1574811641042698320>）"
+            if tadocoin_balance is not None
+            else ""
+        )
+        embed.add_field(
+            name="<:TADOCOIN_TEMP:1574811641042698320> タドコイン",
+            value=f"**{sign}{tadocoin_delta:,}** タドコイン {bal_text}".strip(),
+            inline=False,
+        )
 
     image_file: discord.File | None = None
     image_path = _get_tier_image_path(result.tier.name)
@@ -134,7 +167,7 @@ class OmikujiCog(commands.Cog):
 
     @app_commands.command(
         name="omikuji",
-        description="おみくじを引きます",
+        description="ホモみくじを引いてウン勢♂を占おう（提案）",
     )
     @app_commands.guild_only()
     async def omikuji(self, interaction: discord.Interaction) -> None:
@@ -163,7 +196,17 @@ class OmikujiCog(commands.Cog):
         drawn_at = self.bot.storage.record_omikuji_draw(
             guild.id, interaction.user.id, today_jst, result.tier.name
         )
-        embed, image_file = build_omikuji_embed(interaction.user, result, drawn_at)
+        delta = get_omikuji_tadocoin_delta(result.tier.name)
+        new_balance = self.bot.storage.add_tadocoin(
+            guild.id, interaction.user.id, delta
+        )
+        embed, image_file = build_omikuji_embed(
+            interaction.user,
+            result,
+            drawn_at,
+            tadocoin_delta=delta,
+            tadocoin_balance=new_balance,
+        )
         if image_file is not None:
             await interaction.response.send_message(embed=embed, file=image_file)
         else:

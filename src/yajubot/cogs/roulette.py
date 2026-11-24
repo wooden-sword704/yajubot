@@ -955,7 +955,7 @@ class RouletteCog(commands.Cog):
 
     @app_commands.command(
         name="roulette",
-        description="ルーレットの開設または候補追加を行います",
+        description="ルーレットを開けて候補追加ペロペロ舐めち",
     )
     @app_commands.guild_only()
     async def roulette_cmd(self, interaction: discord.Interaction) -> None:
