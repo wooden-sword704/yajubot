@@ -80,7 +80,7 @@ def strip_reply_header(text: str) -> str:
 
 # 返信1行目のヘッダーパターン（削除検知および編集時のヘッダー保持用）
 REPLY_HEADER_PATTERN = re.compile(
-    r"(?P<emojis>(?:<:reply1:1571547845683712101>|:reply1:)(?:<:reply2:1571547847264829490>|:reply2:))"
+    r"(?P<emojis>(?:<:reply1:1574689082640961567>|:reply1:)(?:<:reply2:1574689100873732237>|:reply2:))"
     r"(?P<summary>(?:@|<@!?\d+>).*?\s*:\s*\[.*?\])"
     r"(?P<link>\((?P<url>https://discord\.com/channels/\d+/\d+/(?P<msg_id>\d+))\))?"
 )

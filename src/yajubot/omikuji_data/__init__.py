@@ -52,15 +52,14 @@ class OmikujiRandomCategory:
 # 初期設定: 6ティア（均等確率。必要に応じて probability を編集してください）
 OMIKUJI_TIERS: tuple[OmikujiTier, ...] = (
     OmikujiTier(
-        name="お　お　あ　た　り",
+        name="# お　お　あ　た　り",
         color=0xFF69B4,
-        probability=0.1,
-        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["おおあたり"]},
+        probability=1,        categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["おおあたり"]},
     ),
     OmikujiTier(
         name="ビリー兄貴級",
         color=0xFFD700,
-        probability=15,
+        probability=10,
         categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["ビリー"]},
     ),
     OmikujiTier(
@@ -82,9 +81,9 @@ OMIKUJI_TIERS: tuple[OmikujiTier, ...] = (
         categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["拓也"]},
     ),
     OmikujiTier(
-        name="<a:gabigabipinky:1574377152311337040> お　お　は　ず　れ <a:gabigabipinky:1574377152311337040>",
+        name="# <a:gabigabipinky:1574738391751336008> お　お　は　ず　れ <a:gabigabipinky:1574738391751336008>",
         color=0xE74C3C,
-        probability=0.1,
+        probability=5,
         categories={TIER_CATEGORY_NAME: INMU_FAMILY_BY_TIER["ピンキー"]},
     ),
 )

@@ -108,9 +108,9 @@ def build_omikuji_embed(
     """おみくじ結果表示用の Embed と添付画像を生成する。"""
     embed = discord.Embed(
         title=f"{user.display_name}のおみくじ",
+        description=f"**運勢**\n{result.tier.name}",
         color=discord.Color(result.tier.color),
     )
-    embed.add_field(name="運勢", value=result.tier.name, inline=False)
     for category, value in result.items:
         embed.add_field(name=category, value=value, inline=False)
 
