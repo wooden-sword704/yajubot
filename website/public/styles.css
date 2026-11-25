@@ -290,6 +290,32 @@ a {
   margin-bottom: 4px;
 }
 
+.cmd-block {
+  display: inline-block;
+  max-width: 100%;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 5px 12px;
+  margin: 4px 0 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: var(--text-primary);
+  overflow-x: auto;
+  user-select: all;
+}
+
+.cmd-block p,
+.cmd-block code {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+}
+
 .formal-details {
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-color);
@@ -368,4 +394,18 @@ a {
   .legal-card {
     padding: 22px 18px;
   }
+}
+
+/* Content Links */
+.legal-card a[href]:not(.btn),
+.feature-item a[href]:not(.btn) {
+  color: #00a8fc;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color 0.15s ease;
+}
+
+.legal-card a[href]:not(.btn):hover,
+.feature-item a[href]:not(.btn):hover {
+  color: #4cc2ff;
 }

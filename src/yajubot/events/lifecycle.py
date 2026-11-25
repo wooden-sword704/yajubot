@@ -49,7 +49,7 @@ class LifecycleEvents(commands.Cog):
                     name=f"/help | {uptime}",
                 )
             )
-        except discord.HTTPException:
+        except Exception:
             logger.debug("ステータスの更新に失敗しました。", exc_info=True)
 
     @tasks.loop(minutes=1)

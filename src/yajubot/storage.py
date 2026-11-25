@@ -9,6 +9,7 @@ import logging
 import os
 import sqlite3
 import threading
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,7 +23,14 @@ OWNER_USER_ID: int = 1108317459125121096
 
 DEFAULT_DB_PATH = Path("data/yajubot.db")
 DEFAULT_KEY_PATH = Path("data/.log_key")
-DEFAULT_MAX_RECORDS = 50_000
+DEFAULT_MAX_RECORDS = 1_000_000
+_ZLIB_MAGIC_HEADER = b"\x00ZLIB\x00"
+
+DEFAULT_DISBOARD_BOT_ID: int = 302050872383242240
+DEFAULT_DISSOKU_BOT_ID: int = 761562078095867916
+DEFAULT_BUMP_DELAY_MINUTES: int = 120
+DEFAULT_UP_DELAY_MINUTES: int = 60
+_UNSET: object = object()
 
 
 JST = timezone(timedelta(hours=9))
@@ -78,12 +86,18 @@ class LogCipher:
         self._fernet = Fernet(fernet_key)
 
     def encrypt(self, plaintext: str) -> bytes:
-        return self._fernet.encrypt(plaintext.encode("utf-8"))
+        compressed = _ZLIB_MAGIC_HEADER + zlib.compress(
+            plaintext.encode("utf-8"), level=6
+        )
+        return self._fernet.encrypt(compressed)
 
     def decrypt(self, token: bytes) -> str:
         try:
-            return self._fernet.decrypt(token).decode("utf-8")
-        except (InvalidToken, UnicodeDecodeError):
+            raw = self._fernet.decrypt(token)
+            if raw.startswith(_ZLIB_MAGIC_HEADER):
+                raw = zlib.decompress(raw[len(_ZLIB_MAGIC_HEADER) :])
+            return raw.decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError, zlib.error):
             return "<復号失敗>"
 
 
@@ -127,6 +141,32 @@ class RouletteCandidateRecord:
     roulette_id: int
     user_id: int
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class BumpNotifySettings:
+    """サーバー単位の Bump/Up 通知設定。"""
+
+    guild_id: int
+    channel_id: int | None = None
+    bump_enabled: bool = True
+    up_enabled: bool = True
+    bump_delay_minutes: int = DEFAULT_BUMP_DELAY_MINUTES
+    up_delay_minutes: int = DEFAULT_UP_DELAY_MINUTES
+    bump_bot_id: int = DEFAULT_DISBOARD_BOT_ID
+    up_bot_id: int = DEFAULT_DISSOKU_BOT_ID
+
+
+@dataclass(frozen=True, slots=True)
+class BumpReminderRecord:
+    """永続化された Bump/Up リマインダーレコード。"""
+
+    guild_id: int
+    command_type: str
+    channel_id: int
+    user_id: int
+    notify_at: float
+    created_at: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,8 +224,11 @@ class ProxyStorage:
             key_path=None if self._is_memory else DEFAULT_KEY_PATH
         )
         self._max_records = max_records
+        self._write_ops_since_trim = 0
+        self._guild_settings_cache: dict[int, GuildSettings] = {}
+        self._bump_settings_cache: dict[int, BumpNotifySettings] = {}
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self._db_path_str, check_same_thread=False)
+        self._conn = sqlite3.connect(self._db_path_str, check_same_thread=False, timeout=10.0)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
         self._auto_restore_role_backup_if_empty()
@@ -193,6 +236,8 @@ class ProxyStorage:
     def _init_schema(self) -> None:
         with self._lock:
             cur = self._conn.cursor()
+            cur.execute("PRAGMA foreign_keys = ON;")
+            cur.execute("PRAGMA busy_timeout = 5000;")
             if not self._is_memory:
                 cur.execute("PRAGMA journal_mode=WAL;")
                 cur.execute("PRAGMA synchronous=NORMAL;")
@@ -226,6 +271,12 @@ class ProxyStorage:
                 """
                 CREATE INDEX IF NOT EXISTS idx_proxy_deleted
                 ON proxy_messages(guild_id, is_deleted, deleted_at DESC);
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_proxy_created_at
+                ON proxy_messages(created_at ASC, proxy_msg_id ASC);
                 """
             )
             cur.execute(
@@ -316,6 +367,52 @@ class ProxyStorage:
                 ON shinkei_records(guild_id, difficulty, best_time_sec ASC);
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sub_role_plans (
+                    guild_id INTEGER NOT NULL,
+                    role_id INTEGER NOT NULL,
+                    weekly_cost INTEGER NOT NULL,
+                    PRIMARY KEY (guild_id, role_id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_role_subscriptions (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    role_id INTEGER NOT NULL,
+                    next_billing_ts INTEGER NOT NULL,
+                    notify_muted INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (guild_id, user_id, role_id)
+                );
+                """
+            )
+            sub_cols = {
+                r["name"]
+                for r in cur.execute(
+                    "PRAGMA table_info(user_role_subscriptions)"
+                ).fetchall()
+            }
+            if "notify_muted" not in sub_cols:
+                cur.execute(
+                    "ALTER TABLE user_role_subscriptions ADD COLUMN notify_muted INTEGER NOT NULL DEFAULT 0;"
+                )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sub_due
+                ON user_role_subscriptions(next_billing_ts);
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bot_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                """
+            )
 
             cur.execute(
                 """
@@ -381,6 +478,33 @@ class ProxyStorage:
             }
             if "title" not in r_cols:
                 cur.execute("ALTER TABLE roulettes ADD COLUMN title TEXT NOT NULL DEFAULT '';")
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS bump_notify_settings (
+                    guild_id INTEGER PRIMARY KEY,
+                    channel_id INTEGER,
+                    bump_enabled INTEGER NOT NULL DEFAULT 1,
+                    up_enabled INTEGER NOT NULL DEFAULT 1,
+                    bump_delay_minutes INTEGER NOT NULL DEFAULT {DEFAULT_BUMP_DELAY_MINUTES},
+                    up_delay_minutes INTEGER NOT NULL DEFAULT {DEFAULT_UP_DELAY_MINUTES},
+                    bump_bot_id INTEGER NOT NULL DEFAULT {DEFAULT_DISBOARD_BOT_ID},
+                    up_bot_id INTEGER NOT NULL DEFAULT {DEFAULT_DISSOKU_BOT_ID}
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bump_reminders (
+                    guild_id INTEGER NOT NULL,
+                    command_type TEXT NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    notify_at REAL NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (guild_id, command_type)
+                );
+                """
+            )
             self._conn.commit()
 
     def close(self) -> None:
@@ -390,13 +514,20 @@ class ProxyStorage:
     # --- ギルド設定 ---
 
     def get_guild_settings(self, guild_id: int) -> GuildSettings:
+        cached = self._guild_settings_cache.get(guild_id)
+        if cached is not None:
+            return cached
         with self._lock:
             row = self._conn.execute(
                 "SELECT proxy_role_ids, admin_role_ids, log_channel_id, binjou_channel_ids, binjou_probability, stage_mod_role_ids, self_assignable_role_ids, tadocoin_excluded_channel_ids FROM guild_settings WHERE guild_id = ?",
                 (guild_id,),
             ).fetchone()
         if row is None:
-            return GuildSettings(guild_id=guild_id)
+            result = GuildSettings(guild_id=guild_id)
+            if len(self._guild_settings_cache) >= 2000:
+                self._guild_settings_cache.clear()
+            self._guild_settings_cache[guild_id] = result
+            return result
         try:
             proxy_ids = tuple(int(r) for r in json.loads(row["proxy_role_ids"]))
         except (ValueError, TypeError):
@@ -430,7 +561,7 @@ class ProxyStorage:
             )
         except (ValueError, TypeError):
             tadocoin_excluded_ids = ()
-        return GuildSettings(
+        result = GuildSettings(
             guild_id=guild_id,
             proxy_role_ids=proxy_ids,
             admin_role_ids=admin_ids,
@@ -441,6 +572,13 @@ class ProxyStorage:
             self_assignable_role_ids=self_assignable_ids,
             tadocoin_excluded_channel_ids=tadocoin_excluded_ids,
         )
+        if len(self._guild_settings_cache) >= 2000:
+            self._guild_settings_cache.clear()
+        self._guild_settings_cache[guild_id] = result
+        return result
+
+    def _invalidate_guild_settings(self, guild_id: int) -> None:
+        self._guild_settings_cache.pop(guild_id, None)
 
     def set_log_channel(
         self, guild_id: int, channel_id: int | None
@@ -455,6 +593,7 @@ class ProxyStorage:
                 (guild_id, channel_id),
             )
             self._conn.commit()
+        self._invalidate_guild_settings(guild_id)
         return self.get_guild_settings(guild_id)
 
     def set_proxy_roles(self, guild_id: int, role_ids: list[int]) -> GuildSettings:
@@ -469,6 +608,7 @@ class ProxyStorage:
                 (guild_id, serialized),
             )
             self._conn.commit()
+        self._invalidate_guild_settings(guild_id)
         return self.get_guild_settings(guild_id)
 
     def set_admin_roles(self, guild_id: int, role_ids: list[int]) -> GuildSettings:
@@ -483,6 +623,7 @@ class ProxyStorage:
                 (guild_id, serialized),
             )
             self._conn.commit()
+        self._invalidate_guild_settings(guild_id)
         return self.get_guild_settings(guild_id)
 
     def set_binjou_channels(self, guild_id: int, channel_ids: list[int]) -> GuildSettings:
@@ -497,6 +638,7 @@ class ProxyStorage:
                 (guild_id, serialized),
             )
             self._conn.commit()
+        self._invalidate_guild_settings(guild_id)
         return self.get_guild_settings(guild_id)
 
     def set_binjou_probability(self, guild_id: int, probability: float) -> GuildSettings:
@@ -511,6 +653,7 @@ class ProxyStorage:
                 (guild_id, clamped),
             )
             self._conn.commit()
+        self._invalidate_guild_settings(guild_id)
         return self.get_guild_settings(guild_id)
 
     def set_stage_mod_roles(self, guild_id: int, role_ids: list[int]) -> GuildSettings:
@@ -525,6 +668,7 @@ class ProxyStorage:
                 (guild_id, serialized),
             )
             self._conn.commit()
+        self._invalidate_guild_settings(guild_id)
         return self.get_guild_settings(guild_id)
 
     def set_self_assignable_roles(self, guild_id: int, role_ids: list[int]) -> GuildSettings:
@@ -540,6 +684,7 @@ class ProxyStorage:
             )
             self._conn.commit()
             self._sync_role_toggle_backup_locked(overwrite_guild_settings_id=guild_id)
+        self._invalidate_guild_settings(guild_id)
         return self.get_guild_settings(guild_id)
 
     def get_user_toggleable_roles(self, guild_id: int, user_id: int) -> set[int]:
@@ -717,6 +862,7 @@ class ProxyStorage:
                             if cur.rowcount and cur.rowcount > 0:
                                 restored_entries += 1
             self._conn.commit()
+        self._guild_settings_cache.clear()
         return (restored_guilds, restored_entries)
 
     def set_tadocoin_excluded_channels(
@@ -733,6 +879,7 @@ class ProxyStorage:
                 (guild_id, serialized),
             )
             self._conn.commit()
+        self._invalidate_guild_settings(guild_id)
         return self.get_guild_settings(guild_id)
 
     # --- タドコイン & リーダーボード ---
@@ -873,6 +1020,216 @@ class ProxyStorage:
             for r in rows
         ]
 
+    # --- サブスクロール（週次課金） ---
+
+    def set_sub_role_plan(
+        self, guild_id: int, role_id: int, weekly_cost: int
+    ) -> None:
+        with self._lock:
+            if weekly_cost <= 0:
+                self._conn.execute(
+                    "DELETE FROM sub_role_plans WHERE guild_id = ? AND role_id = ?",
+                    (guild_id, role_id),
+                )
+            else:
+                self._conn.execute(
+                    """
+                    INSERT INTO sub_role_plans (guild_id, role_id, weekly_cost)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(guild_id, role_id) DO UPDATE SET weekly_cost = excluded.weekly_cost
+                    """,
+                    (guild_id, role_id, int(weekly_cost)),
+                )
+            self._conn.commit()
+
+    def get_sub_role_plans(self, guild_id: int) -> dict[int, int]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT role_id, weekly_cost FROM sub_role_plans WHERE guild_id = ? ORDER BY weekly_cost ASC, role_id ASC",
+                (guild_id,),
+            ).fetchall()
+        return {int(r["role_id"]): int(r["weekly_cost"]) for r in rows}
+
+    def subscribe_user_role(
+        self, guild_id: int, user_id: int, role_id: int, next_billing_ts: int
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO user_role_subscriptions (guild_id, user_id, role_id, next_billing_ts)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id, user_id, role_id) DO UPDATE SET next_billing_ts = excluded.next_billing_ts
+                """,
+                (guild_id, user_id, role_id, int(next_billing_ts)),
+            )
+            self._conn.commit()
+
+    def unsubscribe_user_role(
+        self, guild_id: int, user_id: int, role_id: int
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM user_role_subscriptions WHERE guild_id = ? AND user_id = ? AND role_id = ?",
+                (guild_id, user_id, role_id),
+            )
+            self._conn.commit()
+
+    def get_user_subscriptions(self, guild_id: int, user_id: int) -> dict[int, int]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT role_id, next_billing_ts FROM user_role_subscriptions WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            ).fetchall()
+        return {int(r["role_id"]): int(r["next_billing_ts"]) for r in rows}
+
+    def get_due_subscriptions(
+        self, now_ts: int, *, guild_id: int | None = None
+    ) -> list[tuple[int, int, int, int]]:
+        with self._lock:
+            if guild_id is None:
+                rows = self._conn.execute(
+                    "SELECT guild_id, user_id, role_id, next_billing_ts FROM user_role_subscriptions WHERE next_billing_ts <= ?",
+                    (int(now_ts),),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT guild_id, user_id, role_id, next_billing_ts FROM user_role_subscriptions WHERE guild_id = ? AND next_billing_ts <= ?",
+                    (guild_id, int(now_ts)),
+                ).fetchall()
+        return [
+            (
+                int(r["guild_id"]),
+                int(r["user_id"]),
+                int(r["role_id"]),
+                int(r["next_billing_ts"]),
+            )
+            for r in rows
+        ]
+
+    def get_all_subscriptions(
+        self, *, guild_id: int | None = None
+    ) -> list[tuple[int, int, int, int]]:
+        with self._lock:
+            if guild_id is None:
+                rows = self._conn.execute(
+                    "SELECT guild_id, user_id, role_id, next_billing_ts FROM user_role_subscriptions"
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT guild_id, user_id, role_id, next_billing_ts FROM user_role_subscriptions WHERE guild_id = ?",
+                    (guild_id,),
+                ).fetchall()
+        return [
+            (
+                int(r["guild_id"]),
+                int(r["user_id"]),
+                int(r["role_id"]),
+                int(r["next_billing_ts"]),
+            )
+            for r in rows
+        ]
+
+    def update_subscription_next_billing(
+        self, guild_id: int, user_id: int, role_id: int, next_billing_ts: int
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE user_role_subscriptions
+                SET next_billing_ts = ?
+                WHERE guild_id = ? AND user_id = ? AND role_id = ?
+                """,
+                (int(next_billing_ts), guild_id, user_id, role_id),
+            )
+            self._conn.commit()
+
+    def is_sub_notify_muted(
+        self, guild_id: int, user_id: int, *, role_id: int | None = None
+    ) -> bool:
+        with self._lock:
+            if role_id is None:
+                row = self._conn.execute(
+                    "SELECT 1 FROM user_role_subscriptions WHERE guild_id = ? AND user_id = ? AND notify_muted = 1 LIMIT 1",
+                    (guild_id, user_id),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT 1 FROM user_role_subscriptions WHERE guild_id = ? AND user_id = ? AND role_id = ? AND notify_muted = 1 LIMIT 1",
+                    (guild_id, user_id, role_id),
+                ).fetchone()
+        return row is not None
+
+    def set_sub_notify_muted(
+        self,
+        guild_id: int,
+        user_id: int,
+        muted: bool,
+        *,
+        role_id: int | None = None,
+    ) -> None:
+        val = 1 if muted else 0
+        with self._lock:
+            if role_id is None:
+                self._conn.execute(
+                    "UPDATE user_role_subscriptions SET notify_muted = ? WHERE guild_id = ? AND user_id = ?",
+                    (val, guild_id, user_id),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE user_role_subscriptions SET notify_muted = ? WHERE guild_id = ? AND user_id = ? AND role_id = ?",
+                    (val, guild_id, user_id, role_id),
+                )
+            self._conn.commit()
+
+    def unmute_user_sub_notifications(self, user_id: int) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE user_role_subscriptions SET notify_muted = 0 WHERE user_id = ? AND notify_muted = 1",
+                (user_id,),
+            )
+            self._conn.commit()
+            return cur.rowcount or 0
+
+    def get_meta(self, key: str) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM bot_meta WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return str(row["value"]) if row is not None else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO bot_meta (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+            self._conn.commit()
+
+    def reset_all_data(self) -> None:
+        """DB 内の全テーブルおよび非暗号化ロールバックアップを完全に初期化する。"""
+        with self._lock:
+            tables = [
+                r["name"]
+                for r in self._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            ]
+            for table_name in tables:
+                self._conn.execute(f'DELETE FROM "{table_name}";')
+            self._conn.commit()
+            self._guild_settings_cache.clear()
+            self._bump_settings_cache.clear()
+            if self._role_backup_path is not None and self._role_backup_path.exists():
+                try:
+                    self._role_backup_path.unlink()
+                except OSError:
+                    pass
+
     # --- プロキシメッセージ履歴＆暗号化ログ ---
 
     def record_proxy_message(
@@ -913,6 +1270,11 @@ class ProxyStorage:
     def _enforce_record_limit_locked(self) -> None:
         if self._max_records <= 0:
             return
+        self._write_ops_since_trim += 1
+        # 大容量本番設定時は 500 回書き込みごとにまとめて間引き、毎回の COUNT(*) を回避する
+        if self._max_records > 1000 and self._write_ops_since_trim < 500:
+            return
+        self._write_ops_since_trim = 0
         row = self._conn.execute("SELECT COUNT(*) AS cnt FROM proxy_messages").fetchone()
         if row is not None and row["cnt"] > self._max_records:
             excess = row["cnt"] - self._max_records
@@ -1325,6 +1687,212 @@ class ProxyStorage:
             cur = self._conn.execute(
                 "DELETE FROM roulette_candidates WHERE id = ?",
                 (candidate_id,),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    # --- Bump / Up 通知設定・リマインダー ---
+
+    def get_bump_notify_settings(self, guild_id: int) -> BumpNotifySettings:
+        cached = self._bump_settings_cache.get(guild_id)
+        if cached is not None:
+            return cached
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT guild_id, channel_id, bump_enabled, up_enabled,
+                       bump_delay_minutes, up_delay_minutes, bump_bot_id, up_bot_id
+                FROM bump_notify_settings
+                WHERE guild_id = ?
+                """,
+                (guild_id,),
+            ).fetchone()
+        if row is None:
+            result = BumpNotifySettings(guild_id=guild_id)
+        else:
+            result = BumpNotifySettings(
+                guild_id=int(row["guild_id"]),
+                channel_id=int(row["channel_id"]) if row["channel_id"] is not None else None,
+                bump_enabled=bool(row["bump_enabled"]),
+                up_enabled=bool(row["up_enabled"]),
+                bump_delay_minutes=max(1, int(row["bump_delay_minutes"])),
+                up_delay_minutes=max(1, int(row["up_delay_minutes"])),
+                bump_bot_id=int(row["bump_bot_id"]),
+                up_bot_id=int(row["up_bot_id"]),
+            )
+        if len(self._bump_settings_cache) >= 2000:
+            self._bump_settings_cache.clear()
+        self._bump_settings_cache[guild_id] = result
+        return result
+
+    def update_bump_notify_settings(
+        self,
+        guild_id: int,
+        *,
+        channel_id: int | None | object = _UNSET,
+        bump_enabled: bool | None = None,
+        up_enabled: bool | None = None,
+        bump_delay_minutes: int | None = None,
+        up_delay_minutes: int | None = None,
+        bump_bot_id: int | None = None,
+        up_bot_id: int | None = None,
+    ) -> BumpNotifySettings:
+        current = self.get_bump_notify_settings(guild_id)
+        next_channel = (
+            current.channel_id
+            if channel_id is _UNSET
+            else (int(channel_id) if channel_id is not None else None)
+        )
+        next_bump_enabled = (
+            current.bump_enabled if bump_enabled is None else bool(bump_enabled)
+        )
+        next_up_enabled = (
+            current.up_enabled if up_enabled is None else bool(up_enabled)
+        )
+        next_bump_delay = (
+            current.bump_delay_minutes
+            if bump_delay_minutes is None
+            else max(1, int(bump_delay_minutes))
+        )
+        next_up_delay = (
+            current.up_delay_minutes
+            if up_delay_minutes is None
+            else max(1, int(up_delay_minutes))
+        )
+        next_bump_bot = (
+            current.bump_bot_id if bump_bot_id is None else int(bump_bot_id)
+        )
+        next_up_bot = current.up_bot_id if up_bot_id is None else int(up_bot_id)
+
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO bump_notify_settings (
+                    guild_id, channel_id, bump_enabled, up_enabled,
+                    bump_delay_minutes, up_delay_minutes, bump_bot_id, up_bot_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    channel_id = excluded.channel_id,
+                    bump_enabled = excluded.bump_enabled,
+                    up_enabled = excluded.up_enabled,
+                    bump_delay_minutes = excluded.bump_delay_minutes,
+                    up_delay_minutes = excluded.up_delay_minutes,
+                    bump_bot_id = excluded.bump_bot_id,
+                    up_bot_id = excluded.up_bot_id
+                """,
+                (
+                    guild_id,
+                    next_channel,
+                    int(next_bump_enabled),
+                    int(next_up_enabled),
+                    next_bump_delay,
+                    next_up_delay,
+                    next_bump_bot,
+                    next_up_bot,
+                ),
+            )
+            self._conn.commit()
+        self._bump_settings_cache.pop(guild_id, None)
+        return self.get_bump_notify_settings(guild_id)
+
+    def upsert_bump_reminder(
+        self,
+        guild_id: int,
+        command_type: str,
+        channel_id: int,
+        user_id: int,
+        notify_at: float,
+        created_at: float | None = None,
+    ) -> BumpReminderRecord:
+        now_ts = float(created_at if created_at is not None else datetime.now(timezone.utc).timestamp())
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO bump_reminders (
+                    guild_id, command_type, channel_id, user_id, notify_at, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(guild_id, command_type) DO UPDATE SET
+                    channel_id = excluded.channel_id,
+                    user_id = excluded.user_id,
+                    notify_at = excluded.notify_at,
+                    created_at = excluded.created_at
+                """,
+                (guild_id, command_type, channel_id, user_id, float(notify_at), now_ts),
+            )
+            self._conn.commit()
+        return BumpReminderRecord(
+            guild_id=guild_id,
+            command_type=command_type,
+            channel_id=channel_id,
+            user_id=user_id,
+            notify_at=float(notify_at),
+            created_at=now_ts,
+        )
+
+    def get_bump_reminder(
+        self, guild_id: int, command_type: str
+    ) -> BumpReminderRecord | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT guild_id, command_type, channel_id, user_id, notify_at, created_at
+                FROM bump_reminders
+                WHERE guild_id = ? AND command_type = ?
+                """,
+                (guild_id, command_type),
+            ).fetchone()
+        if row is None:
+            return None
+        return BumpReminderRecord(
+            guild_id=int(row["guild_id"]),
+            command_type=str(row["command_type"]),
+            channel_id=int(row["channel_id"]),
+            user_id=int(row["user_id"]),
+            notify_at=float(row["notify_at"]),
+            created_at=float(row["created_at"]),
+        )
+
+    def list_bump_reminders(
+        self, guild_id: int | None = None
+    ) -> list[BumpReminderRecord]:
+        with self._lock:
+            if guild_id is not None:
+                rows = self._conn.execute(
+                    """
+                    SELECT guild_id, command_type, channel_id, user_id, notify_at, created_at
+                    FROM bump_reminders
+                    WHERE guild_id = ?
+                    ORDER BY notify_at ASC
+                    """,
+                    (guild_id,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """
+                    SELECT guild_id, command_type, channel_id, user_id, notify_at, created_at
+                    FROM bump_reminders
+                    ORDER BY notify_at ASC
+                    """
+                ).fetchall()
+        return [
+            BumpReminderRecord(
+                guild_id=int(r["guild_id"]),
+                command_type=str(r["command_type"]),
+                channel_id=int(r["channel_id"]),
+                user_id=int(r["user_id"]),
+                notify_at=float(r["notify_at"]),
+                created_at=float(r["created_at"]),
+            )
+            for r in rows
+        ]
+
+    def delete_bump_reminder(self, guild_id: int, command_type: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM bump_reminders WHERE guild_id = ? AND command_type = ?",
+                (guild_id, command_type),
             )
             self._conn.commit()
             return cur.rowcount > 0

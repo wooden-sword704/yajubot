@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import platform
+import random
+import time
 from datetime import datetime, timezone
 
 import discord
@@ -48,11 +50,26 @@ def _iter_slash_entries(
     return entries
 
 
+CHINPOKO_DANCE_TEXT = (
+    "またチンポコダンスを踊るぜ？（初耳）\n"
+    "チンチンブラブラソーセージ♪おっとこの股間で揺れている♪\n"
+    "チンチンブラブラソーセージ♪おっとこの股間で揺れている♪\n"
+    "チン！チン！ブラ！ブラ！ソー！セー！ジ！"
+)
+CHINPOKO_KENJA_RESPONSES: tuple[str, ...] = (
+    "ﾁﾝﾎﾟﾁﾝﾎﾟオォ、これ以上やるとオォ俺のチンポが爆発するぜ\n（オナアキはあと約 {minutes} 分賢者タイムです。さっさと爆発しろ）",
+    "俺、恥ずかしい思いするのが俺の仕事だから…こんなこともう、嫌で、嫌でしょうがないけど…はっきり言って俺後悔してる…だけどもう…今更手遅れだから、俺は…！もう覚悟を決めて、一生、聡ずかしい思いをしながら、生きていくぜ？俺の生き様を、しっかりと…アッ見てくれ\n（オナアキはあと約 {minutes} 分賢者タイムです。は～つっかえ！）",
+    "俺、後悔してるのに、もう、手遅れだなんて…こんなの辛いよぉ\n（オナアキはあと約 {minutes} 分賢者タイムです。は～つっかえ！）",
+    "俺はこんなに汚い尻をしているんだぞ！（脅迫）\n（オナアキはあと約 {minutes} 分賢者タイムです。は～つっかえ！）",
+)
+
+
 class GeneralCog(commands.Cog):
     """基本的な確認用・案内用スラッシュコマンド群。"""
 
     def __init__(self, bot: YajuBot) -> None:
         self.bot = bot
+        self._kenja_until: dict[tuple[int, int], float] = {}
 
     @app_commands.command(name="ping", description="いつレイテンシ計測を受けてもいいように…（有能参謀）")
     async def ping(self, interaction: discord.Interaction) -> None:
@@ -120,6 +137,26 @@ class GeneralCog(commands.Cog):
             embed.description = "登録されているスラッシュコマンドがないやん！どうしてくれんのこれ！"
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="chinpokodance", description="またチンポコダンスを踊るぜ？（初耳）")
+    async def chinpokodance(self, interaction: discord.Interaction) -> None:
+        now = time.monotonic()
+        key = (interaction.guild_id or 0, interaction.user.id)
+        until = self._kenja_until.get(key, 0.0)
+        if now < until:
+            rem_min = max(1, math.ceil((until - now) / 60.0))
+            msg = random.choice(CHINPOKO_KENJA_RESPONSES).format(minutes=rem_min)
+            await interaction.response.send_message(msg, ephemeral=True)
+            return
+        kenja_minutes = random.randint(10, 240)
+        self._kenja_until[key] = now + kenja_minutes * 60.0
+        if len(self._kenja_until) > 5000:
+            stale = [k for k, ts in self._kenja_until.items() if ts <= now]
+            for k in stale:
+                del self._kenja_until[k]
+            while len(self._kenja_until) > 5000:
+                del self._kenja_until[next(iter(self._kenja_until))]
+        await interaction.response.send_message(CHINPOKO_DANCE_TEXT)
 
 
 async def setup(bot: YajuBot) -> None:

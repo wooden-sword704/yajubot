@@ -27,8 +27,8 @@ DISCORD_MESSAGE_MAX_LENGTH = 2000
 # 既存のカスタム絵文字 (<:name:id> や <a:name:id>) またはショートコード (:name:) をマッチング
 EMOJI_TOKEN_PATTERN = re.compile(r"(<a?:[a-zA-Z0-9_]+:\d+>)|:([a-zA-Z0-9_]+):")
 
-REPLY1_EMOJI = "<:reply1:1571547845683712101>"
-REPLY2_EMOJI = "<:reply2:1571547847264829490>"
+REPLY1_EMOJI = "<:reply1:1574689082640961567>"
+REPLY2_EMOJI = "<:reply2:1574689100873732237>"
 
 
 class ProxyError(RuntimeError):
@@ -385,11 +385,21 @@ async def resolve_webhook_target(
     raise ProxyError("（こ↑こ↓のチャンネル種別では Webhook が使え）ないです")
 
 
+_PROXY_WEBHOOK_CACHE: dict[int, discord.Webhook] = {}
+
+
 async def get_or_create_proxy_webhook(
     target_channel: Any,
     bot_user_id: int,
 ) -> discord.Webhook:
     """Bot 自身が所有する（コンポーネント送信可能な）Webhook を取得または作成する。"""
+    ch_id = getattr(target_channel, "id", None)
+    # 実チャンネル（int ID）の場合のみキャッシュを利用
+    if isinstance(ch_id, int) and isinstance(target_channel, discord.abc.GuildChannel):
+        cached = _PROXY_WEBHOOK_CACHE.get(ch_id)
+        if cached is not None and getattr(cached, "token", None) is not None:
+            return cached
+
     try:
         webhooks = await target_channel.webhooks()
     except discord.Forbidden as exc:
@@ -403,13 +413,22 @@ async def get_or_create_proxy_webhook(
             and webhook.user is not None
             and webhook.user.id == bot_user_id
         ):
+            if isinstance(ch_id, int) and isinstance(target_channel, discord.abc.GuildChannel):
+                if len(_PROXY_WEBHOOK_CACHE) >= 500:
+                    _PROXY_WEBHOOK_CACHE.clear()
+                _PROXY_WEBHOOK_CACHE[ch_id] = webhook
             return webhook
 
     try:
-        return await target_channel.create_webhook(
+        webhook = await target_channel.create_webhook(
             name=WEBHOOK_NAME,
             reason="メッセージ代替送信システム用",
         )
+        if isinstance(ch_id, int) and isinstance(target_channel, discord.abc.GuildChannel):
+            if len(_PROXY_WEBHOOK_CACHE) >= 500:
+                _PROXY_WEBHOOK_CACHE.clear()
+            _PROXY_WEBHOOK_CACHE[ch_id] = webhook
+        return webhook
     except discord.Forbidden as exc:
         raise ProxyError(
             "Bot に「ウェブフックの管理 (Manage Webhooks)」権限がないため、"
@@ -420,8 +439,10 @@ async def get_or_create_proxy_webhook(
 async def delete_webhook_message(
     target_message: discord.Message,
     bot_user_id: int | None,
+    *,
+    allow_fallback_delete: bool = True,
 ) -> None:
-    """Webhook 経由（不可時は通常削除）で対象メッセージを削除する。"""
+    """Webhook 経由（許可時のみ通常削除フォールバック）で対象メッセージを削除する。"""
     if bot_user_id is not None:
         try:
             target_channel, thread = await resolve_webhook_target(target_message.channel)
@@ -432,8 +453,9 @@ async def delete_webhook_message(
                 await webhook.delete_message(target_message.id)
             return
         except (ProxyError, discord.Forbidden, discord.HTTPException):
+            if not allow_fallback_delete:
+                raise
             # Webhook 削除が失敗した場合は Bot の通常削除へフォールバックする
-            pass
 
     await target_message.delete()
 
@@ -555,7 +577,24 @@ class ConfirmDeleteView(discord.ui.View):
         bot_user_id = interaction.client.user.id if interaction.client.user else None
 
         try:
-            await delete_webhook_message(self.target_message, bot_user_id)
+            storage = getattr(interaction.client, "storage", None)
+            is_db_verified = (
+                storage is not None
+                and isinstance(getattr(self.target_message, "id", None), int)
+                and storage.get_proxy_author_id(self.target_message.id) is not None
+            )
+            is_own_bot_message = (
+                bot_user_id is not None
+                and getattr(self.target_message.author, "id", None) == bot_user_id
+                and getattr(self.target_message, "webhook_id", None) is None
+            )
+            # 外部 Webhook へのゼロ幅偽装による任意削除を防ぐため、
+            # DB 照合済みまたは Bot 自身の通常メッセージ以外は通常削除フォールバックを禁止する
+            await delete_webhook_message(
+                self.target_message,
+                bot_user_id,
+                allow_fallback_delete=(is_db_verified or is_own_bot_message),
+            )
         except discord.NotFound:
             await interaction.edit_original_response(
                 content="メッセージはすでに削除されてるゾ。", view=None
@@ -676,12 +715,17 @@ class ProxyMessageModal(discord.ui.Modal):
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     reply_message = None
 
+        should_repost = (
+            self.launcher_message is not None
+            or (channel is not None and channel.id in self.cog._latest_launcher_ids)
+        )
+
         try:
             await self.cog.send_proxy_message(
                 interaction=interaction,
                 content=raw_content,
                 clicked_launcher=self.launcher_message,
-                repost_launcher=True,
+                repost_launcher=should_repost,
                 reply_message=reply_message,
                 reply_content_override=reply_content_override,
                 mention_author=mention_author,
@@ -757,6 +801,20 @@ class ProxyEditModal(discord.ui.Modal, title="メッセージを編集"):
             )
             return
 
+        if interaction.user.id != self.author_id:
+            await interaction.followup.send(
+                "あっおい待てい（江戸っ子）、本人以外は編集できないゾ",
+                ephemeral=True,
+            )
+            return
+
+        if not can_use_proxy(interaction.user, self.cog.bot.storage, guild.id):
+            await interaction.followup.send(
+                "この機能を使う権限がないゾ。`/admin` で許可されたロールを確認してくれよな～",
+                ephemeral=True,
+            )
+            return
+
         bot_user = self.cog.bot.user
         if bot_user is None:
             await interaction.followup.send("Bot の初期化ができてないゾ。", ephemeral=True)
@@ -777,13 +835,9 @@ class ProxyEditModal(discord.ui.Modal, title="メッセージを編集"):
             existing_header = extract_reply_header(raw_target_content)
 
             if existing_header:
-                full_content = f"{existing_header}\n{processed_content}"
+                final_content = f"{existing_header}\n{processed_content}"
             else:
-                full_content = processed_content
-
-            # 不可視メタデータを付与して本人識別を維持
-            invisible_meta = encode_proxy_author_id(self.author_id)
-            final_content = f"{full_content}{invisible_meta}"
+                final_content = processed_content
 
             if len(final_content) > DISCORD_MESSAGE_MAX_LENGTH:
                 raise ProxyError(
@@ -794,6 +848,7 @@ class ProxyEditModal(discord.ui.Modal, title="メッセージを編集"):
             edit_kwargs: dict[str, Any] = {
                 "message_id": self.target_message.id,
                 "content": final_content,
+                "allowed_mentions": discord.AllowedMentions.none(),
             }
             if thread is not None:
                 edit_kwargs["thread"] = thread
@@ -980,8 +1035,6 @@ class ProxyCog(commands.Cog):
         self._pending_throttle_tasks: dict[int, asyncio.Task[None]] = {}
         self._has_pending_throttle_request: dict[int, bool] = {}
 
-        # 削除連動用の返信先逆引きインデックス: reply_target_msg_id -> {(channel_id, proxy_msg_id)}
-        self._reply_target_index: dict[int, set[tuple[int, int]]] = {}
         # ユーザー単位の送信クールダウン管理
         self._user_cooldowns: dict[int, float] = {}
         # プロキシが一度でも使われたチャンネルID（再起動後フォールバックの限定用）
@@ -1019,17 +1072,6 @@ class ProxyCog(commands.Cog):
             del self._pending_replies[key]
         self._pending_replies[key] = value
         self._trim_dict(self._pending_replies, MAX_CACHE_ENTRIES)
-
-    def _register_reply_target(
-        self, reply_target_id: int, channel_id: int, proxy_msg_id: int
-    ) -> None:
-        """返信元メッセージ削除時の高速更新用に逆引きインデックスへ登録する。"""
-        bucket = self._reply_target_index.get(reply_target_id)
-        if bucket is None:
-            bucket = set()
-            self._reply_target_index[reply_target_id] = bucket
-        bucket.add((channel_id, proxy_msg_id))
-        self._trim_dict(self._reply_target_index, MAX_CACHE_ENTRIES)
 
     def _get_lock(self, channel_id: int) -> asyncio.Lock:
         lock = self._channel_locks.get(channel_id)
@@ -1128,6 +1170,8 @@ class ProxyCog(commands.Cog):
                         break
             except asyncio.CancelledError:
                 pass
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                logger.debug("待機ボタン再送信に失敗しました (channel=%s): %s", channel_id, exc)
             finally:
                 self._pending_throttle_tasks.pop(channel_id, None)
 
@@ -1438,7 +1482,15 @@ class ProxyCog(commands.Cog):
             target_channel, thread = await resolve_webhook_target(channel)
             webhook = await get_or_create_proxy_webhook(target_channel, bot_user_id)
 
-            username = (interaction.user.display_name or "User")[:80]
+            raw_name = (interaction.user.display_name or "User").replace("```", "'''")
+            for forbidden_word in ("discord", "clyde", "everyone", "here"):
+                raw_name = re.sub(
+                    forbidden_word,
+                    lambda m: m.group(0)[0] + "\u200b" + m.group(0)[1:],
+                    raw_name,
+                    flags=re.IGNORECASE,
+                )
+            username = (raw_name.strip() or "User")[:80]
             avatar_url = interaction.user.display_avatar.url
 
             # ユーザー入力内のゼロ幅偽装メタデータを除去してから絵文字展開
@@ -1463,9 +1515,7 @@ class ProxyCog(commands.Cog):
                 users=True if mention_author else False,
             )
 
-            # 不可視ゼロ幅文字で送信者ユーザー ID を本文末尾に埋め込む（互換フォールバック用）
-            invisible_meta = encode_proxy_author_id(interaction.user.id)
-            final_content = f"{full_content}{invisible_meta}"
+            final_content = full_content
 
             if len(final_content) > DISCORD_MESSAGE_MAX_LENGTH:
                 raise ProxyError(
@@ -1666,6 +1716,9 @@ class ProxyCog(commands.Cog):
         """直近のチャンネル内メッセージをサジェストする。"""
         channel = interaction.channel
         if channel is None or not hasattr(channel, "history"):
+            return []
+        guild_id = interaction.guild.id if interaction.guild else None
+        if not can_use_proxy(interaction.user, self.bot.storage, guild_id):
             return []
 
         choices: list[app_commands.Choice[str]] = []

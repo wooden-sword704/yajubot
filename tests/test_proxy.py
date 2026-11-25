@@ -449,7 +449,7 @@ class ProxyFlowAndDeleteTest(unittest.IsolatedAsyncioTestCase):
             interaction.response.send_message.assert_awaited_once()
             self.assertIn("返信先の指定を解除したゾ", interaction.response.send_message.call_args.args[0])
 
-            # 3回目: 「直接返信する」ボタンを押すとモーダルへダイレクト遷移（メンション選択あり）
+            # 3回目: パネル未設置チャンネルでも「直接返信する」からモーダルへ遷移でき、送信時にパネルは出現しない
             interaction.response.send_message.reset_mock()
             await cog._context_menu_toggle_reply(interaction, msg1)
             choice_view2 = interaction.response.send_message.call_args.kwargs["view"]

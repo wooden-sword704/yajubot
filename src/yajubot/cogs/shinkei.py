@@ -18,34 +18,63 @@ from yajubot.storage import ProxyStorage
 
 @dataclass(frozen=True, slots=True)
 class ShinkeiRewardSpec:
-    """難易度ごとのタイム別タドコイン報酬設定。"""
+    """難易度ごとの手数別タドコイン報酬設定。"""
 
     base_amount: int
-    fast_sec: float
-    normal_sec: float
-    slow_sec: float
+    fast_moves: int
+    normal_moves: int
+    slow_moves: int
 
 
 SHINKEI_REWARD_SPECS: dict[str, ShinkeiRewardSpec] = {
-    "easy": ShinkeiRewardSpec(base_amount=60, fast_sec=30.0, normal_sec=40.0, slow_sec=55.0),
-    "normal": ShinkeiRewardSpec(base_amount=120, fast_sec=60.0, normal_sec=65.0, slow_sec=70.0),
-    "hard": ShinkeiRewardSpec(base_amount=240, fast_sec=95.0, normal_sec=110.0, slow_sec=130.0),
-    "ikisugi": ShinkeiRewardSpec(base_amount=500, fast_sec=120.0, normal_sec=150.0, slow_sec=180.0),
+    "easy": ShinkeiRewardSpec(base_amount=100, fast_moves=14, normal_moves=19, slow_moves=23),
+    "normal": ShinkeiRewardSpec(base_amount=160, fast_moves=18, normal_moves=23, slow_moves=27),
+    "hard": ShinkeiRewardSpec(base_amount=280, fast_moves=25, normal_moves=29, slow_moves=35),
+    "ikisugi": ShinkeiRewardSpec(base_amount=810, fast_moves=40, normal_moves=55, slow_moves=65),
 }
 
 
-def calculate_shinkei_reward(difficulty_key: str, elapsed_sec: float) -> tuple[int, str]:
-    """クリアタイムに応じたタドコイン獲得量と倍率ラベルを返す。"""
+PERFECT_CLEAR_REWARDS: dict[str, tuple[int, int]] = {
+    # difficulty_key: (required_pairs, bonus_tadocoin)
+    "easy": (6, 30000),
+    "normal": (8, 81000),
+    "hard": (12, 93150),
+    "ikisugi": (12, 1919810),
+}
+
+
+def calculate_shinkei_reward(difficulty_key: str, moves: int) -> tuple[int, str]:
+    """クリア手数に応じたタドコイン獲得量と倍率ラベルを返す。"""
     spec = SHINKEI_REWARD_SPECS.get(difficulty_key)
     if spec is None:
         return 0, "対象外"
-    if elapsed_sec <= spec.fast_sec:
-        return (spec.base_amount * 3) // 2, "1.5倍（神速クリア！）"
-    if elapsed_sec <= spec.normal_sec:
-        return spec.base_amount, "1.0倍（規定タイム内）"
-    if elapsed_sec <= spec.slow_sec:
-        return spec.base_amount // 2, "0.5倍（ギリギリクリア）"
-    return 0, "タイムオーバー（獲得なし）"
+    perfect = PERFECT_CLEAR_REWARDS.get(difficulty_key)
+    if perfect is not None and 0 < moves <= perfect[0]:
+        return perfect[1], "ノーミス最短クリア！！！！！！！！！！！！！！！！！！！！！！！！！！ハギャぎ！？ハギャぎ！？ハギャぎ！？ハギャぎ！？ハギャぎ！？ハギャぎ！？ハギャぎ！？ハギャぎ！？ハギャぎ！？ハギャぎ！？ハギャぎ！？ハギャぎ！？"
+    if moves <= spec.fast_moves:
+        return (spec.base_amount * 3) // 2, "ハヤスギィ！1.5倍ボーナス"
+    if moves <= spec.normal_moves:
+        return spec.base_amount, "1.0倍"
+    if moves <= spec.slow_moves:
+        return spec.base_amount // 2, "0.5倍"
+    return 0, "手数オーバー"
+
+
+def apply_forced_shinkei_moves(game: ShinkeiGame, forced_result: str) -> None:
+    """デバッグ用: 次回クリア時の手数を指定された結果ティアの値へすり替える。"""
+    diff_key = game.difficulty.key
+    spec = SHINKEI_REWARD_SPECS.get(diff_key)
+    if forced_result == "perfect":
+        game.moves = game.difficulty.required_pairs
+    elif spec is not None:
+        if forced_result == "fast":
+            game.moves = spec.fast_moves
+        elif forced_result == "normal":
+            game.moves = spec.normal_moves
+        elif forced_result == "slow":
+            game.moves = spec.slow_moves
+        elif forced_result == "over":
+            game.moves = spec.slow_moves + 5
 
 
 def _apply_shinkei_clear_rewards(
@@ -54,7 +83,7 @@ def _apply_shinkei_clear_rewards(
     elapsed_sec: float,
 ) -> str:
     """クリア時のタドコイン付与と自己ベスト記録を行い、表示用テキストを返す。"""
-    reward, rate_label = calculate_shinkei_reward(game.difficulty.key, elapsed_sec)
+    reward, rate_label = calculate_shinkei_reward(game.difficulty.key, game.moves)
     lines: list[str] = []
 
     if not game.is_multiplayer:
@@ -67,8 +96,6 @@ def _apply_shinkei_clear_rewards(
             lines.append(
                 f"<:TADOCOIN_TEMP:1574811641042698320> **+{reward:,}** タドコイン獲得！（{rate_label} / 所持: **{new_bal:,}**）"
             )
-        else:
-            lines.append(f"<:TADOCOIN_TEMP:1574811641042698320> 獲得なし（{rate_label}）")
         if is_best:
             lines.append("🏆 **自己ベストタイム更新！**（`/leaderboard` に記録されたゾ）")
     else:
@@ -82,8 +109,16 @@ def _apply_shinkei_clear_rewards(
             lines.append(
                 f"<:TADOCOIN_TEMP:1574811641042698320> 勝者 {' '.join(mentions)} に **+{reward:,}** タドコイン！（{rate_label}）"
             )
-        else:
-            lines.append(f"<:TADOCOIN_TEMP:1574811641042698320> 獲得なし（{rate_label}）")
+            losers = [uid for uid in game.players if uid not in winners]
+            loser_reward = reward // 3
+            if loser_reward > 0 and losers:
+                loser_mentions = []
+                for uid in losers:
+                    storage.add_tadocoin(game.guild_id, uid, loser_reward)
+                    loser_mentions.append(f"<@{uid}>")
+                lines.append(
+                    f"<:TADOCOIN_TEMP:1574811641042698320> 敗者 {' '.join(loser_mentions)} に **+{loser_reward:,}** タドコイン！"
+                )
     return "\n".join(lines)
 
 
@@ -491,6 +526,12 @@ class ShinkeiBoardView(discord.ui.View):
                 try:
                     if self.game.is_finished:
                         elapsed = time.monotonic() - self.game.started_at
+                        forced = getattr(
+                            interaction.client, "debug_next_shinkei_result", None
+                        )
+                        if forced is not None:
+                            interaction.client.debug_next_shinkei_result = None  # type: ignore[attr-defined]
+                            apply_forced_shinkei_moves(self.game, forced)
                         storage = getattr(interaction.client, "storage", None)
                         reward_note = (
                             _apply_shinkei_clear_rewards(storage, self.game, elapsed)
@@ -529,6 +570,9 @@ class ShinkeiBoardView(discord.ui.View):
         await asyncio.sleep(self.game.difficulty.reveal_seconds)
 
         async with self.game.lock:
+            if self.game.is_aborted or self.game.is_finished:
+                self.game.is_busy = False
+                return
             self.game.first_pick = None
             self.game.second_pick = None
             self.game.is_busy = False
@@ -603,6 +647,75 @@ class ShinkeiQuitConfirmView(discord.ui.View):
             )
 
 
+MAX_MULTIPLAYER_PLAYERS = 4
+
+
+class ShinkeiLobbyLeaveConfirmView(discord.ui.View):
+    """マルチプレイ待機ロビーからの退出・途中終了確認 View。"""
+
+    def __init__(
+        self, lobby_view: ShinkeiLobbyView, lobby_message: discord.Message | None
+    ) -> None:
+        super().__init__(timeout=60)
+        self.lobby_view = lobby_view
+        self.lobby_message = lobby_message
+
+    @discord.ui.button(label="はい（実行する）", style=discord.ButtonStyle.danger)
+    async def confirm_leave(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        lv = self.lobby_view
+        if lv.is_closed:
+            await interaction.response.edit_message(
+                content="このロビーはすでに終了・開始されているゾ。", view=None
+            )
+            return
+
+        if interaction.user.id not in lv.players:
+            await interaction.response.edit_message(
+                content="すでにロビーから退出しているゾ。", view=None
+            )
+            return
+
+        if interaction.user.id == lv.host_id:
+            lv.is_closed = True
+            lv.stop()
+            closed_embed = discord.Embed(
+                title=f"🃏 神経衰弱 募集終了（{lv.difficulty.label}）",
+                description="ホストによりロビーが途中終了されました。",
+                color=discord.Color.dark_grey(),
+            )
+            if self.lobby_message is not None:
+                try:
+                    await self.lobby_message.edit(embed=closed_embed, view=None)
+                except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
+                    pass
+            await interaction.response.edit_message(
+                content="ロビーを途中終了したゾ。", view=None
+            )
+            return
+
+        lv.players.remove(interaction.user.id)
+        if len(lv.players) < MAX_MULTIPLAYER_PLAYERS:
+            lv.join_button.disabled = False
+        if self.lobby_message is not None:
+            try:
+                await self.lobby_message.edit(embed=lv.build_embed(), view=lv)
+            except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
+                pass
+        await interaction.response.edit_message(
+            content="ロビーから退出したゾ。", view=None
+        )
+
+    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
+    async def cancel_leave(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await interaction.response.edit_message(
+            content="キャンセルしたゾ。", view=None
+        )
+
+
 class ShinkeiLobbyView(discord.ui.View):
     """マルチプレイ参加募集ロビー View。"""
 
@@ -611,6 +724,7 @@ class ShinkeiLobbyView(discord.ui.View):
         self.host_id = host_id
         self.difficulty = difficulty
         self.players: list[int] = [host_id]
+        self.is_closed: bool = False
 
     def build_embed(self) -> discord.Embed:
         member_list = "\n".join(f"• <@{uid}>" for uid in self.players)
@@ -620,7 +734,7 @@ class ShinkeiLobbyView(discord.ui.View):
             color=discord.Color.green(),
         )
         embed.add_field(
-            name=f"参加メンバー（{len(self.players)}人）",
+            name=f"参加メンバー（{len(self.players)} / {MAX_MULTIPLAYER_PLAYERS}人）",
             value=member_list,
             inline=False,
         )
@@ -635,7 +749,15 @@ class ShinkeiLobbyView(discord.ui.View):
                 "すでに参加してるゾ。", ephemeral=True
             )
             return
+        if len(self.players) >= MAX_MULTIPLAYER_PLAYERS:
+            await interaction.response.send_message(
+                f"最大 {MAX_MULTIPLAYER_PLAYERS} 人までしか参加できないゾ。",
+                ephemeral=True,
+            )
+            return
         self.players.append(interaction.user.id)
+        if len(self.players) >= MAX_MULTIPLAYER_PLAYERS:
+            button.disabled = True
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     @discord.ui.button(label="ゲーム開始", emoji="▶️", style=discord.ButtonStyle.success)
@@ -649,14 +771,38 @@ class ShinkeiLobbyView(discord.ui.View):
             return
         if interaction.guild is None:
             return
+        game = None
         try:
             game = create_shinkei_game(interaction.guild, self.difficulty, self.players)
         except ValueError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
         board = ShinkeiBoardView(game)
+        self.is_closed = True
         self.stop()
         await interaction.response.edit_message(content=None, embed=board.build_embed(), view=board)
+
+    @discord.ui.button(label="退出 / 終了", emoji="🚪", style=discord.ButtonStyle.danger)
+    async def leave_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if self.is_closed:
+            await interaction.response.send_message(
+                "このロビーはすでに終了・開始されているゾ。", ephemeral=True
+            )
+            return
+        if interaction.user.id not in self.players:
+            await interaction.response.send_message(
+                "このロビーに参加していないゾ。", ephemeral=True
+            )
+            return
+        msg = (
+            "ホストが抜けるとロビーが途中終了になるゾ。本当に終了する？"
+            if interaction.user.id == self.host_id
+            else "ロビーから退出するゾ。よろしいですか？"
+        )
+        confirm_view = ShinkeiLobbyLeaveConfirmView(self, interaction.message)
+        await interaction.response.send_message(msg, view=confirm_view, ephemeral=True)
 
 
 class ShinkeiModeSelectView(discord.ui.View):

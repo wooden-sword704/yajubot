@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 
 import discord
 
 from yajubot.bot import YajuBot
 from yajubot.config import ConfigError, load_config
+from yajubot.debug_console import start_debug_console_thread
 from yajubot.logging_setup import setup_logging
 
 
@@ -25,6 +27,7 @@ def main() -> None:
     logger.info("yajubot を起動しています...")
 
     bot = YajuBot(config)
+    console_handle = start_debug_console_thread(bot)
     try:
         bot.run(config.token, log_handler=None)
     except discord.LoginFailure:
@@ -40,3 +43,18 @@ def main() -> None:
             "'MESSAGE CONTENT INTENT' のスイッチをオンにして保存してください。"
         )
         sys.exit(1)
+    finally:
+        if console_handle is not None:
+            _, stop_event = console_handle
+            stop_event.set()
+        if getattr(bot, "debug_restart_requested", False):
+            logger.info("デバッグコンソールからの指示により Bot を再起動します...")
+            print("\n🔄 Bot を再起動しています...", flush=True)
+            # Windows では os.execv が親プロセスを即終了してコンソール窓が閉じるため、
+            # 同じコンソール上で子プロセスを同期実行して引き継ぐ。
+            # console_scripts (.exe) 経由起動時は sys.argv[0] が .py ではないため -m yajubot で起動する。
+            result = subprocess.run(
+                [sys.executable, "-m", "yajubot", *sys.argv[1:]],
+                check=False,
+            )
+            sys.exit(result.returncode)

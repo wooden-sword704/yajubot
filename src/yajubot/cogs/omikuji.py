@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -55,14 +56,23 @@ def draw_omikuji(
     tiers: Sequence[OmikujiTier] = OMIKUJI_TIERS,
     categories: Sequence[str] = OMIKUJI_CATEGORIES,
     random_categories: Sequence[OmikujiRandomCategory] = OMIKUJI_RANDOM_CATEGORIES,
+    *,
+    forced_tier_name: str | None = None,
 ) -> OmikujiDrawResult:
     """1. 確率（合計100%へスケーリング）でティアを抽選し、2. ティア項目とティア非依存項目からランダムに1つずつ選ぶ。"""
     valid_tiers = [t for t in tiers if any(t.categories.values())]
     if not valid_tiers:
         raise ValueError("有効なおみくじティア・選択肢が1つも登録されていません。")
 
-    probabilities = normalize_tier_probabilities(valid_tiers)
-    selected_tier = random.choices(valid_tiers, weights=probabilities, k=1)[0]
+    selected_tier: OmikujiTier | None = None
+    if forced_tier_name:
+        for t in valid_tiers:
+            if t.name == forced_tier_name or forced_tier_name in t.name:
+                selected_tier = t
+                break
+    if selected_tier is None:
+        probabilities = normalize_tier_probabilities(valid_tiers)
+        selected_tier = random.choices(valid_tiers, weights=probabilities, k=1)[0]
 
     chosen_items: list[tuple[str, str]] = []
     # OMIKUJI_CATEGORIES の順番で抽選し、ティア独自の項目があれば後ろに追加
@@ -92,12 +102,12 @@ from pathlib import Path
 OMIKUJI_IMAGES_DIR = Path(__file__).resolve().parent.parent / "omikuji_data" / "images"
 
 OMIKUJI_TADOCOIN_RULES: tuple[tuple[str, int], ...] = (
-    ("お　お　あ　た　り", 3000),
-    ("ビリー兄貴級", 300),
-    ("野獣先輩級", 150),
-    ("MUR大先輩級", 100),
-    ("拓也さん級", 50),
-    ("お　お　は　ず　れ", -200),
+    ("お　お　あ　た　り", 300000),
+    ("ビリー兄貴級", 12000),
+    ("野獣先輩級", 8000),
+    ("MUR大先輩級", 5000),
+    ("拓也さん級", 3000),
+    ("お　お　は　ず　れ", -5000),
 )
 
 
@@ -159,11 +169,12 @@ def build_omikuji_embed(
 class OmikujiCog(commands.Cog):
     """おみくじコマンドを提供する Cog。"""
 
-    # デバッグ用: True の間は1日1回制限を無効化（False に戻すと制限が復活）
-    DEBUG_NO_COOLDOWN: bool = True
+    # デバッグ用: True の間は1日1回制限を無効化（本番は必ず False）
+    DEBUG_NO_COOLDOWN: bool = False
 
     def __init__(self, bot: YajuBot) -> None:
         self.bot = bot
+        self._draw_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
     @app_commands.command(
         name="omikuji",
@@ -179,38 +190,52 @@ class OmikujiCog(commands.Cog):
             return
 
         today_jst = get_today_jst_str()
-        if not self.DEBUG_NO_COOLDOWN:
-            existing = self.bot.storage.get_omikuji_today(
-                guild.id, interaction.user.id, today_jst
-            )
-            if existing is not None:
-                result_name, drawn_at = existing
-                await interaction.response.send_message(
-                    f"今日はもうおみくじを引いたゾ！（本日の結果: **{result_name}** / {drawn_at}）\n"
-                    "また明日（0:00 JST 以降）に引いてくれよな～頼むよ～",
-                    ephemeral=True,
-                )
-                return
+        lock_key = (guild.id, interaction.user.id)
+        lock = self._draw_locks.get(lock_key)
+        if lock is None:
+            if len(self._draw_locks) >= 2000:
+                idle_keys = [k for k, lk in self._draw_locks.items() if not lk.locked()]
+                for k in idle_keys[: len(idle_keys) // 2 + 1]:
+                    del self._draw_locks[k]
+            lock = asyncio.Lock()
+            self._draw_locks[lock_key] = lock
 
-        result = draw_omikuji()
-        drawn_at = self.bot.storage.record_omikuji_draw(
-            guild.id, interaction.user.id, today_jst, result.tier.name
-        )
-        delta = get_omikuji_tadocoin_delta(result.tier.name)
-        new_balance = self.bot.storage.add_tadocoin(
-            guild.id, interaction.user.id, delta
-        )
-        embed, image_file = build_omikuji_embed(
-            interaction.user,
-            result,
-            drawn_at,
-            tadocoin_delta=delta,
-            tadocoin_balance=new_balance,
-        )
-        if image_file is not None:
-            await interaction.response.send_message(embed=embed, file=image_file)
-        else:
-            await interaction.response.send_message(embed=embed)
+        async with lock:
+            if not self.DEBUG_NO_COOLDOWN:
+                existing = self.bot.storage.get_omikuji_today(
+                    guild.id, interaction.user.id, today_jst
+                )
+                if existing is not None:
+                    result_name, drawn_at = existing
+                    await interaction.response.send_message(
+                        f"今日はもうおみくじを引いたゾ！（本日の結果: **{result_name}** / {drawn_at}）\n"
+                        "また明日（0:00 JST 以降）に引いてくれよな～頼むよ～",
+                        ephemeral=True,
+                    )
+                    return
+
+            forced_tier = getattr(self.bot, "debug_next_omikuji_tier", None)
+            if forced_tier is not None:
+                self.bot.debug_next_omikuji_tier = None
+            result = draw_omikuji(forced_tier_name=forced_tier)
+            drawn_at = self.bot.storage.record_omikuji_draw(
+                guild.id, interaction.user.id, today_jst, result.tier.name
+            )
+            delta = get_omikuji_tadocoin_delta(result.tier.name)
+            new_balance = self.bot.storage.add_tadocoin(
+                guild.id, interaction.user.id, delta
+            )
+            embed, image_file = build_omikuji_embed(
+                interaction.user,
+                result,
+                drawn_at,
+                tadocoin_delta=delta,
+                tadocoin_balance=new_balance,
+            )
+            if image_file is not None:
+                await interaction.response.send_message(embed=embed, file=image_file)
+            else:
+                await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: YajuBot) -> None:

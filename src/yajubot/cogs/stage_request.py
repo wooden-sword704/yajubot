@@ -88,6 +88,12 @@ class StageRejectTimeoutView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         rv = self.request_view
+        if not can_moderate_stage(interaction.user, rv.bot, rv.guild_id):
+            await interaction.response.send_message(
+                "承認・拒否はステージモデレーターまたは管理者のみ実行できるゾ。",
+                ephemeral=True,
+            )
+            return
         if rv._handled:
             await interaction.response.edit_message(
                 content="このリクエストはすでに対応済みだゾ。", view=None
@@ -195,25 +201,27 @@ class StageRequestView(discord.ui.View):
             )
             return
 
+        self._handled = True
         try:
             await member.edit(
                 suppress=False,
                 reason=f"ステージスピーカーリクエスト承認 (by {interaction.user})",
             )
         except discord.Forbidden:
+            self._handled = False
             await interaction.response.send_message(
                 "Bot にステージでスピーカーを招待する権限（メンバーをミュート/移動）がないゾ。",
                 ephemeral=True,
             )
             return
         except discord.HTTPException as exc:
+            self._handled = False
             await interaction.response.send_message(
                 f"スピーカー招待の送信に失敗したゾ: {exc}",
                 ephemeral=True,
             )
             return
 
-        self._handled = True
         self.stop()
         self.cog.clear_pending(self.guild_id, self.requester_id)
         await interaction.response.edit_message(
@@ -355,7 +363,14 @@ class StageRequestCog(commands.Cog):
         return until
 
     def set_timeout(self, guild_id: int, user_id: int, seconds: int) -> None:
-        self._request_timeouts[(guild_id, user_id)] = time.time() + seconds
+        now = time.time()
+        self._request_timeouts[(guild_id, user_id)] = now + seconds
+        if len(self._request_timeouts) > 5000:
+            stale = [k for k, ts in self._request_timeouts.items() if ts <= now]
+            for k in stale:
+                del self._request_timeouts[k]
+            while len(self._request_timeouts) > 5000:
+                del self._request_timeouts[next(iter(self._request_timeouts))]
 
     async def send_speaker_request(
         self,
@@ -385,12 +400,16 @@ class StageRequestCog(commands.Cog):
             reason=reason,
         )
         embed = view._build_embed("承認待ち", discord.Color.blurple())
-        await channel.send(
-            content=mention_text,
-            embed=embed,
-            view=view,
-            allowed_mentions=allowed_mentions,
-        )
+        try:
+            await channel.send(
+                content=mention_text,
+                embed=embed,
+                view=view,
+                allowed_mentions=allowed_mentions,
+            )
+        except Exception:
+            self.clear_pending(guild_id, requester_id)
+            raise
 
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -423,6 +442,13 @@ class StageRequestCog(commands.Cog):
         if now - last_at < HAND_RAISE_COOLDOWN_SECONDS:
             return
         self._hand_raise_cooldowns[key] = now
+        if len(self._hand_raise_cooldowns) > 5000:
+            cutoff = now - HAND_RAISE_COOLDOWN_SECONDS
+            stale = [k for k, ts in self._hand_raise_cooldowns.items() if ts < cutoff]
+            for k in stale:
+                del self._hand_raise_cooldowns[k]
+            while len(self._hand_raise_cooldowns) > 5000:
+                del self._hand_raise_cooldowns[next(iter(self._hand_raise_cooldowns))]
 
         # タイムアウト期間中かチェック
         timeout_until = self.get_timeout_until(guild_id, member.id)
@@ -495,15 +521,23 @@ class StageRequestCog(commands.Cog):
             )
             return
 
-        await interaction.response.send_message(
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self.send_speaker_request(
+                channel=channel,
+                guild_id=guild.id,
+                requester_id=interaction.user.id,
+                mention=mention,
+                reason=reason,
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.followup.send(
+                "スピーカーリクエストの送信に失敗したゾ（Bot のチャンネル送信権限を確認してくれよな～）。",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
             "スピーカーリクエストを送信したゾ！", ephemeral=True
-        )
-        await self.send_speaker_request(
-            channel=channel,
-            guild_id=guild.id,
-            requester_id=interaction.user.id,
-            mention=mention,
-            reason=reason,
         )
 
 

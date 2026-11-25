@@ -37,7 +37,7 @@ ROLE_SETTING_CONFIG: dict[str, dict[str, str]] = {
     "proxy": {
         "attr": "proxy_role_ids",
         "field_name": "発信・返信 許可ロール",
-        "empty_text": "未設定（管理者・管理ロール・例外アカウントのみ利用可）",
+        "empty_text": "未設定（管理者・管理ロールのみ利用可）",
         "title": "🔐 発信・返信 許可ロール設定",
         "description": (
             "身代わり送信・返信（`/proxy`・`/say`・返信ボタン）を利用できるロールを設定するゾ。\n"
@@ -48,7 +48,7 @@ ROLE_SETTING_CONFIG: dict[str, dict[str, str]] = {
     "admin": {
         "attr": "admin_role_ids",
         "field_name": "Bot管理（/admin・/proxy）許可ロール",
-        "empty_text": "未設定（サーバー管理者・例外アカウントのみ利用可）",
+        "empty_text": "未設定（サーバー管理者のみ利用可）",
         "title": "🛡️ Bot管理（/admin・/proxy）許可ロール設定",
         "description": (
             "管理パネル（`/admin panel`）や代理送信管理などの Bot 管理機能を利用できるロールを設定するゾ。\n"
@@ -243,6 +243,31 @@ def build_tadocoin_override_embed(
             value=f"<@{uid}> のタドコインを **{amount:,}** に設定したゾ。",
             inline=False,
         )
+    return embed
+
+
+def build_sub_role_plan_embed(bot: YajuBot, guild_id: int) -> discord.Embed:
+    """サブスクロール設定画面用の Embed を生成する。"""
+    plans = bot.storage.get_sub_role_plans(guild_id)
+    embed = discord.Embed(
+        title="👑 サブスクロール設定（/subrole）",
+        description=(
+            "ユーザーが週額タドコインで維持できるサブスクロールを設定するゾ。\n"
+            "下の選択メニューからロールを選ぶと、毎週の引き落とし額入力モーダルが開くゾ（0 を入力するとプラン解除）。"
+        ),
+        color=discord.Color.gold(),
+    )
+    if plans:
+        lines = [
+            f"• <@&{rid}> — **{cost:,}** <:TADOCOIN_TEMP:1574811641042698320>/週"
+            for rid, cost in plans.items()
+        ]
+        plan_text = "\n".join(lines)
+        if len(plan_text) > 1024:
+            plan_text = plan_text[:1021] + "..."
+        embed.add_field(name="現在のプラン一覧", value=plan_text, inline=False)
+    else:
+        embed.add_field(name="現在のプラン一覧", value="未設定", inline=False)
     return embed
 
 
@@ -826,6 +851,101 @@ class TadocoinOverrideView(discord.ui.View):
         )
 
 
+class SubRoleCostModal(discord.ui.Modal, title="サブスクロール週額の設定"):
+    """サブスクロールの毎週引き落とし額を入力するモーダル。"""
+
+    cost_input: discord.ui.TextInput = discord.ui.TextInput(
+        label="毎週の引き落としタドコイン数（0で解除）",
+        placeholder="例: 500（0 を入力するとこのロールのプランを削除）",
+        required=True,
+        max_length=10,
+    )
+
+    def __init__(
+        self,
+        bot: YajuBot,
+        guild_id: int,
+        role: discord.Role,
+        parent_view: SubRolePlanView,
+    ) -> None:
+        super().__init__(timeout=180)
+        self.bot = bot
+        self.guild_id = guild_id
+        self.role = role
+        self.parent_view = parent_view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        raw = (self.cost_input.value or "").strip()
+        try:
+            cost = int(raw)
+        except ValueError:
+            await interaction.response.send_message(
+                "0以上の整数を入力してくれよな～", ephemeral=True
+            )
+            return
+        if cost < 0:
+            await interaction.response.send_message(
+                "0以上の整数を指定してくれよな～", ephemeral=True
+            )
+            return
+
+        self.bot.storage.set_sub_role_plan(self.guild_id, self.role.id, cost)
+        await interaction.response.edit_message(
+            embed=build_sub_role_plan_embed(self.bot, self.guild_id),
+            view=self.parent_view,
+        )
+
+
+class SubRolePlanView(discord.ui.View):
+    """サブスクロールのロール・週額設定 View。"""
+
+    def __init__(self, bot: YajuBot, guild_id: int) -> None:
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.guild_id = guild_id
+
+    @discord.ui.select(
+        cls=discord.ui.RoleSelect,
+        placeholder="サブスク対象にするロールを選択（週額設定・解除）",
+        min_values=1,
+        max_values=1,
+        row=0,
+    )
+    async def role_select(
+        self, interaction: discord.Interaction, select: discord.ui.RoleSelect
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        role = select.values[0]
+        inspection = inspect_self_role(role)
+        if inspection.is_blocked:
+            await interaction.response.send_message(
+                f"{role.mention} は設定できないゾ: {' / '.join(inspection.blocked_reasons)}",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(
+            SubRoleCostModal(self.bot, self.guild_id, role, self)
+        )
+
+    @discord.ui.button(label="◀ パネルに戻る", style=discord.ButtonStyle.primary, row=1)
+    async def back_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        settings = self.bot.storage.get_guild_settings(self.guild_id)
+        await interaction.response.edit_message(
+            embed=build_settings_embed(settings),
+            view=AdminPanelView(self.bot, self.guild_id),
+        )
+
+
 class AdminPanelView(discord.ui.View):
     """管理設定パネル（プルダウンから各設定・管理画面へ遷移）の View。"""
 
@@ -876,6 +996,11 @@ class AdminPanelView(discord.ui.View):
                 label="ユーザータドコイン上書き設定",
                 emoji="💰",
                 value="tadocoin_override",
+            ),
+            discord.SelectOption(
+                label="サブスクロール設定",
+                emoji="👑",
+                value="sub_roles",
             ),
             discord.SelectOption(
                 label="IDから送信者を確認（メッセージ照会）",
@@ -940,6 +1065,11 @@ class AdminPanelView(discord.ui.View):
                 embed=build_tadocoin_override_embed(),
                 view=TadocoinOverrideView(self.bot, self.guild_id),
             )
+        elif choice == "sub_roles":
+            await interaction.response.edit_message(
+                embed=build_sub_role_plan_embed(self.bot, self.guild_id),
+                view=SubRolePlanView(self.bot, self.guild_id),
+            )
         elif choice == "lookup":
             await interaction.response.send_modal(LookupMessageModal(self.bot))
         elif choice == "deleted_logs":
@@ -990,6 +1120,9 @@ class BinjouProbabilityModal(discord.ui.Modal, title="便乗発動確率の設�
         self.parent_view = parent_view
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
         raw = self.probability_input.value.strip().rstrip("%")
         try:
             prob = float(raw)

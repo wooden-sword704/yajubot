@@ -10,6 +10,7 @@ import aiohttp
 import discord
 
 from yajubot.bot import YajuBot
+from yajubot.cogs.proxy import REPLY1_EMOJI, REPLY2_EMOJI
 from yajubot.cogs.translate import MAX_TRANSLATE_LENGTH, TranslateCog
 from yajubot.config import BotConfig
 from yajubot.translator import (
@@ -36,6 +37,7 @@ def _make_mock_session(status: int, json_data: object) -> MagicMock:
 
     session = MagicMock(spec=aiohttp.ClientSession)
     session.get = MagicMock(return_value=cm)
+    session.post = MagicMock(return_value=cm)
     return session
 
 
@@ -213,17 +215,53 @@ class TranslateCogTest(unittest.IsolatedAsyncioTestCase):
             cog = TranslateCog(bot, translator=backend)
 
             interaction = self._make_interaction()
-            message = SimpleNamespace(content="こんにちは")
+            interaction.user = SimpleNamespace(id=777, mention="<@777>", display_name="ExecUser")
+            message = MagicMock(spec=discord.Message)
+            message.id = 123
+            message.webhook_id = None
+            message.content = "こんにちは"
+            message.clean_content = "こんにちは"
+            message.attachments = []
+            message.embeds = []
+            message.components = []
+            message.jump_url = "https://discord.com/channels/1/2/123"
+            message.author = SimpleNamespace(
+                mention="<@42>", display_name="User42"
+            )
             await cog.gabagaba_context_menu(interaction, message)
 
             interaction.response.defer.assert_awaited_once()
             interaction.followup.send.assert_awaited_once()
             args = interaction.followup.send.call_args.args
             kwargs = interaction.followup.send.call_args.kwargs
-            self.assertEqual(args[0], "ガバガバ結果")
+            expected_header = (
+                f"{REPLY1_EMOJI}{REPLY2_EMOJI}<@777> :[こんにちは](https://discord.com/channels/1/2/123)"
+            )
+            self.assertEqual(args[0], f"{expected_header}\nガバガバ結果")
             self.assertNotIn("embed", kwargs)
             self.assertIsInstance(kwargs["allowed_mentions"], discord.AllowedMentions)
             self.assertFalse(kwargs["allowed_mentions"].users)
+
+            # 翻訳済みメッセージ（返信ヘッダー付き）を再翻訳しても最初の返信行は翻訳対象に含まれない
+            backend.translate.reset_mock()
+            retranslate_msg = MagicMock(spec=discord.Message)
+            retranslate_msg.id = 124
+            retranslate_msg.webhook_id = None
+            retranslate_msg.content = f"{expected_header}\n再翻訳したい本文"
+            retranslate_msg.clean_content = retranslate_msg.content
+            retranslate_msg.attachments = []
+            retranslate_msg.embeds = []
+            retranslate_msg.components = []
+            retranslate_msg.jump_url = "https://discord.com/channels/1/2/124"
+            retranslate_msg.author = SimpleNamespace(
+                mention="<@99>", display_name="User99"
+            )
+            interaction2 = self._make_interaction()
+            await cog.gabagaba_context_menu(interaction2, retranslate_msg)
+            # translator に渡った原文に返信ヘッダーが含まれていないこと
+            first_call_text = backend.translate.call_args_list[0].args[0]
+            self.assertNotIn(REPLY1_EMOJI, first_call_text)
+            self.assertEqual(first_call_text, "さいほんやくしたいほんぶん")
         finally:
             await bot.close()
 
@@ -236,9 +274,13 @@ class TranslateCogTest(unittest.IsolatedAsyncioTestCase):
 
             # 正常系
             ok_interaction = self._make_interaction()
+            ok_interaction.user = SimpleNamespace(id=777, mention="<@777>", display_name="ExecUser")
             await cog.translate_slash.callback(cog, ok_interaction, "テスト")
             ok_interaction.followup.send.assert_awaited_once()
-            self.assertEqual(ok_interaction.followup.send.call_args.args[0], "翻訳済み")
+            self.assertEqual(
+                ok_interaction.followup.send.call_args.args[0],
+                f"{REPLY1_EMOJI}{REPLY2_EMOJI}<@777> :テスト\n翻訳済み",
+            )
 
             # 空文字
             empty_interaction = self._make_interaction()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import pkgutil
 from datetime import datetime, timezone
@@ -60,30 +62,35 @@ class YajuCommandTree(app_commands.CommandTree):
             return
 
         command_name = command.qualified_name if command is not None else "unknown"
+        original = (
+            error.original
+            if isinstance(error, app_commands.CommandInvokeError)
+            else error
+        )
 
-        if isinstance(error, app_commands.CommandOnCooldown):
+        if isinstance(original, app_commands.CommandOnCooldown):
             message = (
                 f"冷えてるか～？（レート制限） "
-                f"あと {error.retry_after:.1f} 秒待ってから再試行してくれよな～頼むよ～"
+                f"あと {original.retry_after:.1f} 秒待ってから再試行してくれよな～頼むよ～"
             )
-        elif isinstance(error, discord.RateLimited):
+        elif isinstance(original, discord.RateLimited):
             message = (
                 f"冷えてるか～？（レート制限） "
-                f"あと {error.retry_after:.1f} 秒待ってからやり直してくれよな～頼むよ～"
+                f"あと {original.retry_after:.1f} 秒待ってからやり直してくれよな～頼むよ～"
             )
-        elif isinstance(error, discord.HTTPException) and getattr(error, "status", None) == 429:
+        elif isinstance(original, discord.HTTPException) and getattr(original, "status", None) == 429:
             message = "冷えてるか～？（レート制限） ちょっと時間をおいてからやり直してくれよな～頼むよ～"
-        elif isinstance(error, app_commands.MissingPermissions):
+        elif isinstance(original, app_commands.MissingPermissions):
             message = "実行権限がありませんねぇスギィ！"
-        elif isinstance(error, app_commands.BotMissingPermissions):
+        elif isinstance(original, app_commands.BotMissingPermissions):
             message = "これマジ？上半身に比べてボット権限が貧弱すぎるだろ…"
-        elif isinstance(error, app_commands.CheckFailure):
+        elif isinstance(original, app_commands.CheckFailure):
             message = "このコマンドを実行する条件確認できず"
         else:
             logger.error(
                 "スラッシュコマンド '/%s' の実行中にエラーが発生しました。",
                 command_name,
-                exc_info=error,
+                exc_info=original,
             )
             message = "コマンドの実行中にエラーが発生しました。時間をおいて再度お試しください。"
 
@@ -114,13 +121,19 @@ class YajuBot(commands.Bot):
         self.config = config
         self.started_at: datetime = datetime.now(timezone.utc)
         self.storage: ProxyStorage = storage or ProxyStorage()
+        self.debug_next_omikuji_tier: str | None = None
+        self.debug_next_slot_outcome: str | None = None
+        self.debug_next_shinkei_result: str | None = None
+        self.debug_restart_requested: bool = False
 
     async def close(self) -> None:
         try:
-            self.storage.close()
-        except Exception:
-            logger.debug("ストレージのクローズ中にエラーが発生しました。", exc_info=True)
-        await super().close()
+            await super().close()
+        finally:
+            try:
+                self.storage.close()
+            except Exception:
+                logger.debug("ストレージのクローズ中にエラーが発生しました。", exc_info=True)
 
     async def load_extensions_from(
         self, package_name: str, package_dir: Path
@@ -136,12 +149,42 @@ class YajuBot(commands.Bot):
                 raise
         return extensions
 
-    async def sync_commands(self) -> list[app_commands.AppCommand]:
-        """設定に応じてギルド限定またはグローバルでスラッシュコマンドを同期する。"""
+    def _compute_command_tree_hash(
+        self, *, guild: discord.abc.Snowflake | None = None
+    ) -> str:
+        """現在のコマンドツリー定義のハッシュ値を算出する。"""
+        cmds = self.tree.get_commands(guild=guild)
+        payload = {
+            "target": str(guild.id) if guild is not None else "global",
+            "commands": sorted(
+                [cmd.to_dict(self.tree) for cmd in cmds],
+                key=lambda item: (str(item.get("type", "")), str(item.get("name", ""))),
+            ),
+        }
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
+    async def sync_commands(
+        self, *, force: bool = False
+    ) -> list[app_commands.AppCommand]:
+        """設定に応じてギルド限定またはグローバルでスラッシュコマンドを同期する。
+
+        コマンド定義のハッシュが前回同期時と一致する場合は API 呼び出しをスキップする。
+        """
         try:
+            guild: discord.Object | None = None
             if self.config.guild_id is not None:
                 guild = discord.Object(id=self.config.guild_id)
                 self.tree.copy_global_to(guild=guild)
+
+            current_hash = self._compute_command_tree_hash(guild=guild)
+            if not force and self.storage.get_meta("command_sync_hash") == current_hash:
+                logger.info(
+                    "スラッシュコマンド定義に変更がないため同期をスキップしました。"
+                )
+                return []
+
+            if guild is not None:
                 synced = await self.tree.sync(guild=guild)
                 logger.info(
                     "サーバー (ID: %s) へ %d 件のスラッシュコマンドを同期しました。",
@@ -154,6 +197,7 @@ class YajuBot(commands.Bot):
                     "グローバルへ %d 件のスラッシュコマンドを同期しました。",
                     len(synced),
                 )
+            self.storage.set_meta("command_sync_hash", current_hash)
             return synced
         except (discord.Forbidden, discord.HTTPException) as exc:
             logger.error(

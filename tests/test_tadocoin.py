@@ -18,12 +18,14 @@ from yajubot.cogs.admin import (
 from yajubot.cogs.omikuji import get_omikuji_tadocoin_delta
 from yajubot.cogs.shinkei import (
     DIFFICULTIES,
+    PERFECT_CLEAR_REWARDS,
     ShinkeiGame,
     _apply_shinkei_clear_rewards,
     calculate_shinkei_reward,
 )
 from yajubot.cogs.tadocoin import (
     CHAT_REWARD_AMOUNT,
+    SLOT_MIN_BET,
     LeaderboardView,
     TadocoinCog,
     _build_slot_frame,
@@ -71,13 +73,17 @@ class TadocoinSystemTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(get_omikuji_tadocoin_delta("お　お　は　ず　れ"), 0)
         self.assertGreater(get_omikuji_tadocoin_delta("野獣先輩級"), 0)
 
-        r_fast, _ = calculate_shinkei_reward("normal", 60.0)
-        r_norm, _ = calculate_shinkei_reward("normal", 65.0)
-        r_slow, _ = calculate_shinkei_reward("normal", 70.0)
-        r_over, _ = calculate_shinkei_reward("normal", 75.0)
-        self.assertEqual(r_fast, 180)
-        self.assertEqual(r_norm, 120)
-        self.assertEqual(r_slow, 60)
+        r_perfect, label_perfect = calculate_shinkei_reward("normal", 8)
+        self.assertEqual(r_perfect, PERFECT_CLEAR_REWARDS["normal"][1])
+        self.assertTrue(label_perfect)
+
+        r_fast, _ = calculate_shinkei_reward("normal", 18)
+        r_norm, _ = calculate_shinkei_reward("normal", 23)
+        r_slow, _ = calculate_shinkei_reward("normal", 27)
+        r_over, _ = calculate_shinkei_reward("normal", 28)
+        self.assertEqual(r_fast, 240)
+        self.assertEqual(r_norm, 160)
+        self.assertEqual(r_slow, 80)
         self.assertEqual(r_over, 0)
 
         storage = ProxyStorage(":memory:")
@@ -88,12 +94,40 @@ class TadocoinSystemTest(unittest.IsolatedAsyncioTestCase):
                 difficulty=DIFFICULTIES["normal"],
                 players=[42],
                 cards=[],
-                moves=16,
+                moves=18,
             )
             note = _apply_shinkei_clear_rewards(storage, game, 60.0)
-            self.assertIn("+180", note)
-            self.assertEqual(storage.get_tadocoin_balance(1, 42), 180)
+            self.assertIn("+240", note)
+            self.assertEqual(storage.get_tadocoin_balance(1, 42), 240)
             self.assertEqual(len(storage.get_shinkei_leaderboard(1, "normal")), 1)
+
+            # コインがもらえない手数では獲得表記が出ない
+            game_over = ShinkeiGame(
+                guild_id=1,
+                host_id=42,
+                difficulty=DIFFICULTIES["normal"],
+                players=[42],
+                cards=[],
+                moves=28,
+            )
+            note_over = _apply_shinkei_clear_rewards(storage, game_over, 120.0)
+            self.assertEqual(note_over, "")
+
+            # オンラインプレイ時、敗者にも勝者の1/3が配布される
+            mp_game = ShinkeiGame(
+                guild_id=1,
+                host_id=101,
+                difficulty=DIFFICULTIES["normal"],
+                players=[101, 102],
+                cards=[],
+                moves=18,
+                scores={101: 6, 102: 2},
+            )
+            mp_note = _apply_shinkei_clear_rewards(storage, mp_game, 60.0)
+            self.assertIn("+240", mp_note)
+            self.assertIn("+80", mp_note)
+            self.assertEqual(storage.get_tadocoin_balance(1, 101), 240)
+            self.assertEqual(storage.get_tadocoin_balance(1, 102), 80)
         finally:
             storage.close()
 
@@ -113,9 +147,14 @@ class TadocoinSystemTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(symbols), 5)
         # 同日中は全ユーザー固定（同じ結果になること）
         self.assertEqual(symbols, select_slot_symbols(guild, day_key="2026-11-25"))
-        # 別の日付では日替わりになること
+        # 別の日付では日替わりになること・30日間で2日連続同じ特賞シンボルにならないこと
         symbols_next = select_slot_symbols(guild, day_key="2026-11-26")
-        self.assertNotEqual(symbols, symbols_next)
+        self.assertNotEqual(symbols[0], symbols_next[0])
+        prev_special = None
+        for day in range(1, 31):
+            daily = select_slot_symbols(guild, day_key=f"2026-11-{day:02d}")
+            self.assertNotEqual(daily[0], prev_special)
+            prev_special = daily[0]
 
         frame = _build_slot_frame("🍒", "🍋", "🍇")
         self.assertEqual(frame, "🍒  │  🍋  │  🍇")
@@ -127,10 +166,10 @@ class TadocoinSystemTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(jackpot.payout, 10000)
 
         big = evaluate_slot_spin(symbols, 100, reels=(symbols[1], symbols[1], symbols[1]))
-        self.assertEqual(big.payout, 200)
+        self.assertEqual(big.payout, 300)
 
         small = evaluate_slot_spin(symbols, 100, reels=(symbols[1], symbols[1], symbols[2]))
-        self.assertEqual(small.payout, 100)
+        self.assertEqual(small.payout, 110)
 
         loss = evaluate_slot_spin(symbols, 100, reels=(symbols[0], symbols[1], symbols[2]))
         self.assertEqual(loss.payout, 0)
@@ -138,7 +177,7 @@ class TadocoinSystemTest(unittest.IsolatedAsyncioTestCase):
         # 設定確率 (1% / 9% / 40% / 50%) 付近に収束することを確認
         spins = [evaluate_slot_spin(symbols, 100).payout for _ in range(5000)]
         loss_rate = sum(1 for p in spins if p == 0) / 5000
-        small_rate = sum(1 for p in spins if p == 100) / 5000
+        small_rate = sum(1 for p in spins if p == 110) / 5000
         self.assertGreater(loss_rate, 0.45)
         self.assertLess(loss_rate, 0.55)
         self.assertGreater(small_rate, 0.35)
@@ -181,8 +220,18 @@ class TadocoinSystemTest(unittest.IsolatedAsyncioTestCase):
             inter_poor.response.send_message.assert_awaited_once()
             self.assertIn("足りない", inter_poor.response.send_message.call_args.args[0])
 
+            # 最低ベット額未満は拒否される
+            inter_min = MagicMock(spec=discord.Interaction)
+            inter_min.guild = guild
+            inter_min.user = SimpleNamespace(id=10, display_name="User10")
+            inter_min.response = MagicMock()
+            inter_min.response.send_message = AsyncMock()
+            await cog.slot.callback(cog, inter_min, 100)
+            inter_min.response.send_message.assert_awaited_once()
+            self.assertIn("最低ベット額", inter_min.response.send_message.call_args.args[0])
+
             # スロット実行（成功＋演出）
-            bot.storage.set_tadocoin(1, 10, 100)
+            bot.storage.set_tadocoin(1, 10, SLOT_MIN_BET * 2)
             inter_spin = MagicMock(spec=discord.Interaction)
             inter_spin.guild = guild
             inter_spin.user = SimpleNamespace(id=10, display_name="User10")
@@ -191,7 +240,7 @@ class TadocoinSystemTest(unittest.IsolatedAsyncioTestCase):
             inter_spin.edit_original_response = AsyncMock()
 
             with patch("yajubot.cogs.tadocoin.asyncio.sleep", new=AsyncMock()):
-                await cog.slot.callback(cog, inter_spin, 50)
+                await cog.slot.callback(cog, inter_spin, SLOT_MIN_BET)
             inter_spin.response.send_message.assert_awaited_once()
             self.assertEqual(inter_spin.edit_original_response.await_count, 3)
 
@@ -201,7 +250,7 @@ class TadocoinSystemTest(unittest.IsolatedAsyncioTestCase):
             inter_cd.user = SimpleNamespace(id=10, display_name="User10")
             inter_cd.response = MagicMock()
             inter_cd.response.send_message = AsyncMock()
-            await cog.slot.callback(cog, inter_cd, 10)
+            await cog.slot.callback(cog, inter_cd, SLOT_MIN_BET)
             inter_cd.response.send_message.assert_awaited_once()
             self.assertIn("クールダウン", inter_cd.response.send_message.call_args.args[0])
             self.assertTrue(inter_cd.response.send_message.call_args.kwargs.get("ephemeral"))

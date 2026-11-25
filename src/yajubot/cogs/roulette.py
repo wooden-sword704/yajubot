@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import random
@@ -275,11 +276,17 @@ class RoulettePublishConfirmView(discord.ui.View):
     async def publish_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "この操作はルーレット作成者のみ実行できるゾ。", ephemeral=True
+            )
+            return
         if interaction.guild is None or interaction.channel is None:
             await interaction.response.send_message(
                 "サーバー内のチャンネルでだけ利用できるからね。そして天は鳴き、大地は震えるだろうね", ephemeral=True
             )
             return
+        self.stop()
 
         deadline_ts = int(time.time()) + self.minutes * 60
         roulette = self.cog.bot.storage.create_roulette(
@@ -472,8 +479,40 @@ class RouletteManageView(discord.ui.View):
             close_btn.callback = self._on_close
             self.add_item(close_btn)
 
+    def _is_owner_or_admin(
+        self, interaction: discord.Interaction, roulette: RouletteRecord
+    ) -> bool:
+        if interaction.user.id == roulette.owner_id:
+            return True
+        if interaction.guild is not None and can_manage_bot(
+            interaction.user, self.cog.bot.storage, interaction.guild.id
+        ):
+            return True
+        return False
+
     async def _on_delete_candidate(self, interaction: discord.Interaction) -> None:
+        roulette = self.cog.bot.storage.get_roulette(self.roulette_id)
+        if roulette is None:
+            await interaction.response.edit_message(
+                content="ルーレットが見つからないゾ。", view=None
+            )
+            return
         cand_id = int(interaction.data["values"][0])  # type: ignore[index]
+        candidates = self.cog.bot.storage.list_roulette_candidates(self.roulette_id)
+        target_cand = next((c for c in candidates if c.id == cand_id), None)
+        if target_cand is None:
+            await interaction.response.edit_message(
+                content="指定された候補は見つからないゾ。", view=None
+            )
+            return
+        if (
+            target_cand.user_id != interaction.user.id
+            and not self._is_owner_or_admin(interaction, roulette)
+        ):
+            await interaction.response.send_message(
+                "他のユーザーの候補は削除できないゾ。", ephemeral=True
+            )
+            return
         self.cog.bot.storage.delete_roulette_candidate(cand_id)
         await self.cog.refresh_roulette_message(self.roulette_id)
         await interaction.response.edit_message(
@@ -482,9 +521,22 @@ class RouletteManageView(discord.ui.View):
         )
 
     async def _on_start(self, interaction: discord.Interaction) -> None:
+        roulette = self.cog.bot.storage.get_roulette(self.roulette_id)
+        if roulette is None or not self._is_owner_or_admin(interaction, roulette):
+            await interaction.response.send_message(
+                "ルーレットの開始はオーナーまたは管理者のみ実行できるゾ。", ephemeral=True
+            )
+            return
         await self.cog.prompt_start_mode(interaction, self.roulette_id)
 
     async def _on_close(self, interaction: discord.Interaction) -> None:
+        roulette = self.cog.bot.storage.get_roulette(self.roulette_id)
+        if roulette is None or not self._is_owner_or_admin(interaction, roulette):
+            await interaction.response.send_message(
+                "ルーレットの閉鎖・削除はオーナーまたは管理者のみ実行できるゾ。",
+                ephemeral=True,
+            )
+            return
         await self.cog.close_and_delete_roulette(self.roulette_id)
         await interaction.response.edit_message(
             content=f"ルーレット #{self.roulette_id} を閉鎖・削除したゾ",
@@ -544,6 +596,14 @@ class RouletteModeSelectView(discord.ui.View):
                 content="ルーレットが見つからないゾ。ジャッ！キー！チェン！ジャッ！キー！チェン！", view=None
             )
             return
+        is_admin = interaction.guild is not None and can_manage_bot(
+            interaction.user, self.cog.bot.storage, interaction.guild.id
+        )
+        if interaction.user.id != roulette.owner_id and not is_admin:
+            await interaction.response.send_message(
+                "ルーレットの実行はオーナーまたは管理者のみ行えるゾ。", ephemeral=True
+            )
+            return
         candidates = self.cog.bot.storage.list_roulette_candidates(self.roulette_id)
         if not candidates:
             await interaction.response.edit_message(
@@ -599,6 +659,14 @@ class RouletteEliminationCountView(discord.ui.View):
                 content="ルーレットが見つからないゾ。ジャッ！キー！チェン！ジャッ！キー！チェン！", view=None
             )
             return
+        is_admin = interaction.guild is not None and can_manage_bot(
+            interaction.user, self.cog.bot.storage, interaction.guild.id
+        )
+        if interaction.user.id != roulette.owner_id and not is_admin:
+            await interaction.response.send_message(
+                "ルーレットの実行はオーナーまたは管理者のみ行えるゾ。", ephemeral=True
+            )
+            return
         candidates = self.cog.bot.storage.list_roulette_candidates(self.roulette_id)
         if len(candidates) < 2:
             await interaction.response.edit_message(
@@ -636,6 +704,7 @@ class RouletteEliminationStepView(discord.ui.View):
         self.remaining = list(candidates)
         self.step_count = step_count
         self.elimination_log: list[str] = []
+        self._step_lock = asyncio.Lock()
 
     def build_status_embed(self, latest_eliminated: list[RouletteCandidateRecord] | None = None) -> discord.Embed:
         embed = discord.Embed(
@@ -705,40 +774,42 @@ class RouletteEliminationStepView(discord.ui.View):
             )
             return
 
-        if len(self.remaining) <= 1:
-            return
+        async with self._step_lock:
+            if len(self.remaining) <= 1:
+                await interaction.response.defer()
+                return
 
-        num_to_elim = min(self.step_count, len(self.remaining) - 1)
-        eliminated = random.sample(self.remaining, num_to_elim)
-        elim_ids = {c.id for c in eliminated}
-        self.remaining = [c for c in self.remaining if c.id not in elim_ids]
-        for c in eliminated:
-            self.elimination_log.append(f"脱落: {c.text} (追加者ID: {c.user_id})")
+            num_to_elim = min(self.step_count, len(self.remaining) - 1)
+            eliminated = random.sample(self.remaining, num_to_elim)
+            elim_ids = {c.id for c in eliminated}
+            self.remaining = [c for c in self.remaining if c.id not in elim_ids]
+            for c in eliminated:
+                self.elimination_log.append(f"脱落: {c.text} (追加者ID: {c.user_id})")
 
-        # 旧メッセージのボタンを無効化・削除し、新規メッセージとして送信
-        await interaction.response.edit_message(view=None)
+            # 旧メッセージのボタンを無効化・削除し、新規メッセージとして送信
+            await interaction.response.edit_message(view=None)
 
-        if len(self.remaining) == 1:
-            winner = self.remaining[0]
-            embed = discord.Embed(
-                title=f"ルーレット #{self.roulette.id} 結果",
-                description=f"**{winner.text}** (<@{winner.user_id}>)に決まったゾ。たまげたなあ",
-                color=discord.Color.gold(),
-            )
-            export_view = RouletteExportView(
-                self.roulette,
-                self.all_candidates,
-                winner,
-                f"脱落選抜（{self.step_count}個ずつ）",
-                self.elimination_log,
-            )
-            await self.cog.close_and_delete_roulette(self.roulette.id)
-            await interaction.followup.send(embed=embed, view=export_view)
-            self.stop()
-        else:
-            await interaction.followup.send(
-                embed=self.build_status_embed(eliminated), view=self
-            )
+            if len(self.remaining) == 1:
+                winner = self.remaining[0]
+                embed = discord.Embed(
+                    title=f"ルーレット #{self.roulette.id} 結果",
+                    description=f"**{winner.text}** (<@{winner.user_id}>)に決まったゾ。たまげたなあ",
+                    color=discord.Color.gold(),
+                )
+                export_view = RouletteExportView(
+                    self.roulette,
+                    self.all_candidates,
+                    winner,
+                    f"脱落選抜（{self.step_count}個ずつ）",
+                    self.elimination_log,
+                )
+                await self.cog.close_and_delete_roulette(self.roulette.id)
+                await interaction.followup.send(embed=embed, view=export_view)
+                self.stop()
+            else:
+                await interaction.followup.send(
+                    embed=self.build_status_embed(eliminated), view=self
+                )
 
 
 class RouletteAdminSelectView(discord.ui.View):
@@ -780,10 +851,14 @@ class RouletteCog(commands.Cog):
 
     def __init__(self, bot: YajuBot) -> None:
         self.bot = bot
-        self._deadline_watcher.start()
 
-    def cog_unload(self) -> None:
-        self._deadline_watcher.cancel()
+    async def cog_load(self) -> None:
+        if not self._deadline_watcher.is_running():
+            self._deadline_watcher.start()
+
+    async def cog_unload(self) -> None:
+        if self._deadline_watcher.is_running():
+            self._deadline_watcher.cancel()
 
     async def refresh_roulette_message(self, roulette_id: int) -> None:
         roulette = self.bot.storage.get_roulette(roulette_id)
@@ -854,29 +929,32 @@ class RouletteCog(commands.Cog):
 
     @tasks.loop(seconds=15)
     async def _deadline_watcher(self) -> None:
-        now_ts = int(time.time())
-        expired = self.bot.storage.list_expired_open_roulettes(now_ts)
-        for roulette in expired:
-            self.bot.storage.set_roulette_status(roulette.id, "waiting_start")
-            await self.refresh_roulette_message(roulette.id)
-            channel = self.bot.get_channel(roulette.channel_id)
-            if isinstance(channel, (discord.TextChannel, discord.Thread)):
-                view = discord.ui.View(timeout=None)
-                view.add_item(
-                    discord.ui.Button(
-                        label="ルーレット開始",
-                        emoji="🎲",
-                        style=discord.ButtonStyle.success,
-                        custom_id=f"roulette:start:{roulette.id}",
+        try:
+            now_ts = int(time.time())
+            expired = self.bot.storage.list_expired_open_roulettes(now_ts)
+            for roulette in expired:
+                self.bot.storage.set_roulette_status(roulette.id, "waiting_start")
+                await self.refresh_roulette_message(roulette.id)
+                channel = self.bot.get_channel(roulette.channel_id)
+                if isinstance(channel, (discord.TextChannel, discord.Thread)):
+                    view = discord.ui.View(timeout=None)
+                    view.add_item(
+                        discord.ui.Button(
+                            label="ルーレット開始",
+                            emoji="🎲",
+                            style=discord.ButtonStyle.success,
+                            custom_id=f"roulette:start:{roulette.id}",
+                        )
                     )
-                )
-                try:
-                    await channel.send(
-                        content=f"<@{roulette.owner_id}> ルーレット #{roulette.id} の募集時間が終了しました！開始ボタンを押してルーレットを回してください。",
-                        view=view,
-                    )
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
+                    try:
+                        await channel.send(
+                            content=f"<@{roulette.owner_id}> ルーレット #{roulette.id} の募集時間が終了しました！開始ボタンを押してルーレットを回してください。",
+                            view=view,
+                        )
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+        except Exception:
+            logger.exception("ルーレット締切監視ループでエラーが発生しました。")
 
     @_deadline_watcher.before_loop
     async def _before_deadline_watcher(self) -> None:
@@ -917,14 +995,19 @@ class RouletteCog(commands.Cog):
                 RouletteAddCandidateModal(self, roulette_id)
             )
         elif action == "manage":
-            is_owner = interaction.user.id == roulette.owner_id
-            if is_owner:
+            is_privileged = interaction.user.id == roulette.owner_id or (
+                interaction.guild is not None
+                and can_manage_bot(
+                    interaction.user, self.bot.storage, interaction.guild.id
+                )
+            )
+            if is_privileged:
                 candidates = self.bot.storage.list_roulette_candidates(roulette_id)
                 view = RouletteManageView(
                     self, roulette, candidates, is_privileged=True
                 )
                 await interaction.response.send_message(
-                    f"ルーレット #{roulette.id} の管理パネル（オーナー）",
+                    f"ルーレット #{roulette.id} の管理パネル",
                     view=view,
                     ephemeral=True,
                 )
@@ -946,9 +1029,16 @@ class RouletteCog(commands.Cog):
                     ephemeral=True,
                 )
         elif action == "start":
-            if interaction.user.id != roulette.owner_id:
+            is_privileged = interaction.user.id == roulette.owner_id or (
+                interaction.guild is not None
+                and can_manage_bot(
+                    interaction.user, self.bot.storage, interaction.guild.id
+                )
+            )
+            if not is_privileged:
                 await interaction.response.send_message(
-                    "このボタンはルーレットオーナーのみ使用できます。", ephemeral=True
+                    "このボタンはルーレットオーナーまたは管理者のみ使用できます。",
+                    ephemeral=True,
                 )
                 return
             await self.prompt_start_mode(interaction, roulette_id)

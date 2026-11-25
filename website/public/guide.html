@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>しばきかた - 編隊サーバー管理青年アキラ</title>
+  <meta name="description" content="編隊サーバー管理青年アキラの概要・権限管理・安全管理と基本機能の解説" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-inner">
+      <a href="index.html" class="brand">
+        <!-- <span class="brand-badge">Y</span> -->
+        <span>編隊サーバー管理青年アキラ</span>
+      </a>
+      <button class="menu-toggle" aria-label="メニューを開く" aria-expanded="false">☰</button>
+      <nav class="nav-links">
+        <a href="index.html">ホーム</a>
+        <a href="guide.html" class="active">しばきかた</a>
+        <a href="index.html#features">できること</a>
+        <a href="terms.html">利用規約</a>
+        <a href="privacy.html">プライバシーポリシー</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="legal-wrapper">
+    <div class="container">
+      <article class="legal-card">
+        <h1>しばきかた</h1>
+        <p class="legal-updated">最終更新日: 2026年11月25日</p>
+
+        <div class="legal-notice">
+          <strong>このページについて:</strong><br />
+          「編隊サーバー管理青年アキラ」の基本的な仕様と、各機能のしばきかた。ジュージューになるまでやるからなオイ！
+        </div>
+
+        <section class="legal-section">
+          <h2>1. ボットの概要</h2>
+          <ul>
+            <li>
+              <strong>他サーバーへのインストール不可:</strong><br />
+              本ボットは「<a href="https://discord.gg/yjsnpi">野獣邸</a>」サーバー専用の総合ボットとして運用されており、外部の Discord サーバーへ招待・インストールすることはできません。使える穴は拓也だけ<br/>
+              ボット招待での一般公開案も出ていましたが、サーバーごとのデータ分離や各機能のニーズなどを考慮するとあまり現実的でないため、 一般公開はキャンセルだ
+            </li>
+            <li>
+              <strong>権限管理:</strong><br />
+              スラッシュコマンドは一般メンバー向け機能と、管理者・モデレーター向けの管理機能で権限が分かれてナス<br/>
+              一般ユーザーが管理系コマンドを実行することはできません。そのための権限分離、あとそのための拳？
+            </li>
+            <li>
+              <strong>安全管理:</strong><br />
+              Discord 公式 API（スラッシュコマンド・標準インテント）に準拠して動作し、不要な個人情報の収集や外部への不正なデータは聞いていません<br/>
+              また、ボット経由のメッセージ送信機能なども、サーバー内の安全・秩序を保つため適切な権限およびログ管理のもとで運用されています。
+            </li>
+          </ul>
+        </section>
+
+        <section class="legal-section">
+          <h2>2. 基本機能の解説</h2>
+          <p>基本的にはチャット欄で <code>/</code>（スラッシュ）を入力し、本ボットのコマンドを選択して実行します。</p>
+
+          <h3>便乗</h3>
+          <p>
+            ダウンした本家「そうだよ（便乗）ボット」の代わりに簡易的に便乗するゾ。本家そうだよ（便乗）ボットみたいに賢い便乗はしないゾ
+          </p>
+
+          <h3>おみくじ・神経衰弱・スロット（タドコイン）</h3>
+          <ul>
+            <li><strong>おみくじ:</strong> 1日1回引ける運試し機能です。低確率の最レア結果を目指して毎日引いてみてください。</li>
+            <li><strong>神経衰弱:</strong> サーバー内のカスタム絵文字を使ったミニゲームです。</li>
+            <li><strong>スロット:</strong> サーバー内オリジナル通貨「タドコイン」を賭けて遊べるギャンブル機能です。</li>
+          </ul>
+
+          <h3>ルーレット</h3>
+          <p>
+            参加者や項目を指定して抽選を行えるルーレット機能です。通常の抽選だけでなく、順番に脱落していく方式などにも対応しており、イベントや罰ゲーム決めに活用できます。
+          </p>
+
+          <h3>ステージリクエスト配送</h3>
+          <p>
+            ステージチャンネルでの配信リクエストを、ボット経由でモデレーターへ安全に通知・配送する機能です。配信希望者とモデレーター双方の連絡の手間を減らします。
+          </p>
+
+          <h3>ボット経由メッセージ（プロキシ送信）</h3>
+          <p>
+            ボットを経由して指定のチャンネルへメッセージを送信する機能です。直接投稿によるリスクを低減しつつ、必要な告知やメッセージを届けることができます。
+          </p>
+        </section>
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p>イキスギ</p>
+      <div class="footer-links">
+        <a href="guide.html">しばきかた</a>
+        <a href="terms.html">利用規約</a>
+        <a href="privacy.html">プライバシーポリシー</a>
+        <a href="credits.html">クレジット</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

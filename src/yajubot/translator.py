@@ -163,11 +163,13 @@ class GoogleUnofficialTranslator:
             "sl": source,
             "tl": target,
             "dt": "t",
-            "q": text,
         }
         try:
-            async with session.get(
-                self.ENDPOINT, params=params, timeout=self._timeout
+            async with session.post(
+                self.ENDPOINT,
+                params=params,
+                data={"q": text},
+                timeout=self._timeout,
             ) as resp:
                 if resp.status != 200:
                     raise TranslationError(
@@ -222,6 +224,27 @@ class FallbackTranslator:
                         exc,
                     )
         raise TranslationError("すべての翻訳バックエンドが失敗しました: " + " | ".join(errors))
+
+
+# 一時フラグ: True の間は MyMemory API をバイパスして直接 Google 非公式翻訳を使う（False で元に戻る）
+BYPASS_MYMEMORY: bool = True
+
+
+def build_default_translator(
+    session_factory: Callable[[], aiohttp.ClientSession],
+    *,
+    bypass_mymemory: bool | None = None,
+) -> TranslatorBackend:
+    """デフォルトの翻訳バックエンドを構築する。"""
+    use_bypass = BYPASS_MYMEMORY if bypass_mymemory is None else bypass_mymemory
+    if use_bypass:
+        return FallbackTranslator((GoogleUnofficialTranslator(session_factory),))
+    return FallbackTranslator(
+        (
+            MyMemoryTranslator(session_factory),
+            GoogleUnofficialTranslator(session_factory),
+        )
+    )
 
 
 async def gabagaba_translate(
