@@ -147,12 +147,12 @@ def build_omikuji_embed(
     if tadocoin_delta != 0 or tadocoin_balance is not None:
         sign = "+" if tadocoin_delta >= 0 else ""
         bal_text = (
-            f"（現在: **{tadocoin_balance:,}** <:TADOCOIN_TEMP:1574811641042698320>）"
+            f"（現在: **{tadocoin_balance:,}** <:tadocoin:1575197619569958942>）"
             if tadocoin_balance is not None
             else ""
         )
         embed.add_field(
-            name="<:TADOCOIN_TEMP:1574811641042698320> タドコイン",
+            name="<:tadocoin:1575197619569958942> タドコイン",
             value=f"**{sign}{tadocoin_delta:,}** タドコイン {bal_text}".strip(),
             inline=False,
         )

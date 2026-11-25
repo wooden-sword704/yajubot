@@ -8,22 +8,7 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="site-header">
-    <div class="container nav-inner">
-      <a href="index.html" class="brand">
-        <!-- <span class="brand-badge">Y</span> -->
-        <span>編隊サーバー管理青年アキラ</span>
-      </a>
-      <button class="menu-toggle" aria-label="メニューを開く" aria-expanded="false">☰</button>
-      <nav class="nav-links">
-        <a href="index.html">ホーム</a>
-        <a href="guide.html" class="active">しばきかた</a>
-        <a href="index.html#features">できること</a>
-        <a href="terms.html">利用規約</a>
-        <a href="privacy.html">プライバシーポリシー</a>
-      </nav>
-    </div>
-  </header>
+  <header class="site-header"></header>
 
   <main class="legal-wrapper">
     <div class="container">
@@ -51,7 +36,7 @@
             </li>
             <li>
               <strong>安全管理:</strong><br />
-              Discord 公式 API（スラッシュコマンド・標準インテント）に準拠して動作し、不要な個人情報の収集や外部への不正なデータは聞いていません<br/>
+              Discord 公式 API（スラッシュコマンド・標準インテント）に準拠して動作し、不要な個人情報の収集や外部への不正なデータはないです<br/>
               また、ボット経由のメッセージ送信機能なども、サーバー内の安全・秩序を保つため適切な権限およびログ管理のもとで運用されています。
             </li>
           </ul>
@@ -62,48 +47,73 @@
           <p>基本的にはチャット欄で <code>/</code>（スラッシュ）を入力し、本ボットのコマンドを選択して実行します。</p>
 
           <h3>便乗</h3>
-          <p>
-            ダウンした本家「そうだよ（便乗）ボット」の代わりに簡易的に便乗するゾ。本家そうだよ（便乗）ボットみたいに賢い便乗はしないゾ
-          </p>
-
+          <p>ダウンした本家「そうだよ（便乗）ボット」の代わりに簡易的に便乗するゾ。本家そうだよ（便乗）ボットみたいに賢い便乗はしないゾ</p>
+          <h3>ガバガバ翻訳</h3>
+          <p>ダウンした本家「そうだよ（便乗）ボット」の代わりに簡易的に翻訳するゾ。杜撰な設営なので途中で止まったり、不安定だったり、応答しないこともありますあります</p>
+          <section class="cmd-block">/translate [text:翻訳したい文章]</section>
+          <h3>スピーカーリクエスト</h3>
+          <p>ステージチャンネルでの配信リクエストを、ボット経由でモデレーターへ安全に通知・配送する機能ゾ。手間が減って気持ちがいい！</p>
+          <section class="cmd-block">/speaker_request [mention:メンション→True:する/False:しない] [reason:理由]</section>
+          <h3>ボット経由メッセージ</h3>
+          <p>ボットを経由して指定のチャンネルへメッセージを送信するゾ。直接投稿によるリスクを低減して、DiscordのUNEIによる理不尽BANに対抗しよう（提案）</p>
+          <section class="cmd-block">/say [message:送信するメッセージ] [reply_to:返信先指定] [mention:メンション→True:する/False:しない]</section>
+          
           <h3>おみくじ・神経衰弱・スロット（タドコイン）</h3>
           <ul>
-            <li><strong>おみくじ:</strong> 1日1回引ける運試し機能です。低確率の最レア結果を目指して毎日引いてみてください。</li>
-            <li><strong>神経衰弱:</strong> サーバー内のカスタム絵文字を使ったミニゲームです。</li>
-            <li><strong>スロット:</strong> サーバー内オリジナル通貨「タドコイン」を賭けて遊べるギャンブル機能です。</li>
+            <li><strong>おみくじ:</strong> 毎日引けるホモみくじ。低確率の最レアを引き当ててみよう（提案）</li>
+            <section class="cmd-block">/omikuji</section>
+            <li><strong>神経衰弱:</strong> 鯖の汚い絵文字でカスみたいなゲームが遊べるゾ。うまくこなすとタドコインももらえるゾ</li>
+            <section class="cmd-block">/shinkei</section>
+            <li><strong>スロット:</strong> オリジナル通貨のタドコインを賭けて遊べるゾ。ホモはギャンブラー</li>
+            <section class="cmd-block">/slot [bet:賭けるタドコインの枚数(500枚以上)]</section>
           </ul>
-
+          
           <h3>ルーレット</h3>
-          <p>
-            参加者や項目を指定して抽選を行えるルーレット機能です。通常の抽選だけでなく、順番に脱落していく方式などにも対応しており、イベントや罰ゲーム決めに活用できます。
-          </p>
+          <p>参加者や項目を指定して抽選を行えるルーレット。通常の抽選だけでなく、順番に脱落していく方式などにも対応してるゾ。ホモ共の最悪な名前ルーレットに使おう（絶望）</p>
+          <section class="cmd-block">/roulette</section>
 
-          <h3>ステージリクエスト配送</h3>
-          <p>
-            ステージチャンネルでの配信リクエストを、ボット経由でモデレーターへ安全に通知・配送する機能です。配信希望者とモデレーター双方の連絡の手間を減らします。
-          </p>
+          <h3>bump通知</h3>
+          <p>特定のボットのbump通知を設定・管理できるゾ。通知先や時間設定、オンオフ切り替えが可能。</p>
+          <section class="cmd-block">/bump_notify [bot_id:監視対象のボットのID]</section>
+          <section class="cmd-block">/bump_notify [channel:通知先チャンネル設定]</section>
+          <section class="cmd-block">/bump_notify [status:ステータス確認]</section>
+          <section class="cmd-block">/bump_notify [timer:時間設定]</section>
+          <section class="cmd-block">/bump_notify [toggle:オンオフ切り替え]</section>
+          
+          <h3>ロール着脱</h3>
+          <p>特定のロールをユーザーが自分で着脱できるようにするゾ。管理者は着脱可能なロールを設定し、ユーザーはコマンドで着脱できるゾ。</p>
+          <section class="cmd-block">/role</section>
 
-          <h3>ボット経由メッセージ（プロキシ送信）</h3>
-          <p>
-            ボットを経由して指定のチャンネルへメッセージを送信する機能です。直接投稿によるリスクを低減しつつ、必要な告知やメッセージを届けることができます。
-          </p>
+          <h3>ロールのサブスク</h3>
+          <p>特定のロールをタドコインを毎週消費してサブスクのように継続付与するゾ。管理者はサブスク可能なロールを設定し、ユーザーはコマンドで登録できるゾ。</p>
+          <section class="cmd-block">/subrole</section>
+
+          <h3>チンポコダンス詠唱</h3>
+          <p>チンポコダンスを踊るだけ。発動後は、10分から240分までランダムに賢者タイムに突入して踊れなくなるクソつまんねぇクールダウン付き</p>
+          <section class="cmd-block">/chinpokodance</section>
+
+          <h3>MURはんがきめる</h3>
+          <p>解決しないことはMURはんに聞いて解決しよう（提案）<br />質問を送ると5段階で評価してくれるゾ。</p>
+          <section class="cmd-block">/mur [topic:話題]</section>
+
+          <h3>その他確認用コマンド</h3>
+          <p>ボットの状態、リーダーボード、タドコイン残高などを確認するコマンドをいくつかぶち込んであるゾ。</p>
+          <section class="cmd-block">/help</section>
+          <p>を叩いて、コマンド一覧を何度もリピートして見てくれ</p>
+
+          <h3>その他管理者用コマンド</h3>
+          <p>管理者向けにadminとかついてるコマンドをいくつかぶち込んであるゾ。一般ホモは使え）ないです</p>
+
+
         </section>
+
       </article>
     </div>
   </main>
 
-  <footer class="site-footer">
-    <div class="container footer-inner">
-      <p>イキスギ</p>
-      <div class="footer-links">
-        <a href="guide.html">しばきかた</a>
-        <a href="terms.html">利用規約</a>
-        <a href="privacy.html">プライバシーポリシー</a>
-        <a href="credits.html">クレジット</a>
-      </div>
-    </div>
-  </footer>
+  <footer class="site-footer"></footer>
 
+  <script src="layout.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

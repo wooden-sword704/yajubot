@@ -256,13 +256,13 @@ def build_slot_result_embed(
         description=f"{_build_slot_frame(r1, r2, r3)}\n\n{outcome.tier_label}",
         color=color,
     )
-    embed.add_field(name="賭け金", value=f"**{bet:,}** <:TADOCOIN_TEMP:1574811641042698320>", inline=True)
+    embed.add_field(name="賭け金", value=f"**{bet:,}** <:tadocoin:1575197619569958942>", inline=True)
     embed.add_field(
         name="配当",
-        value=f"**{outcome.payout:,}** <:TADOCOIN_TEMP:1574811641042698320>（{outcome.multiplier_text}）",
+        value=f"**{outcome.payout:,}** <:tadocoin:1575197619569958942>（{outcome.multiplier_text}）",
         inline=True,
     )
-    embed.add_field(name="収支", value=f"**{net_text}** <:TADOCOIN_TEMP:1574811641042698320>", inline=True)
+    embed.add_field(name="収支", value=f"**{net_text}** <:tadocoin:1575197619569958942>", inline=True)
     embed.add_field(
         name="現在の所持数",
         value=f"**{new_balance:,}** タドコイン",
@@ -299,7 +299,7 @@ def build_leaderboard_embed(
         lines = []
         for idx, (uid, balance) in enumerate(rows, start=1):
             prefix = medals[idx - 1] if idx <= 3 else f"**{idx}.**"
-            lines.append(f"{prefix} <@{uid}> — **{balance:,}** <:TADOCOIN_TEMP:1574811641042698320>")
+            lines.append(f"{prefix} <@{uid}> — **{balance:,}** <:tadocoin:1575197619569958942>")
         embed.description = "\n".join(lines)
         return embed
 
@@ -434,7 +434,7 @@ class TadocoinCog(commands.Cog):
             interaction.guild.id, target.id
         )
         embed = discord.Embed(
-            title="<:TADOCOIN_TEMP:1574811641042698320> タドコイン残高",
+            title="<:tadocoin:1575197619569958942> タドコイン残高",
             description=f"{target.mention} の所持数: **{balance:,}** タドコイン",
             color=discord.Color.gold(),
         )
@@ -801,7 +801,7 @@ async def process_sub_role_billing(
                     title="ロール更新通知",
                     description=(
                         f"**{guild_name}** のロール **{role_name}** を更新したゾ\n"
-                        f"引き落とし: **-{cost:,}** <:TADOCOIN_TEMP:1574811641042698320> / 残高: **{new_bal:,}** <:TADOCOIN_TEMP:1574811641042698320>\n"
+                        f"引き落とし: **-{cost:,}** <:tadocoin:1575197619569958942> / 残高: **{new_bal:,}** <:tadocoin:1575197619569958942>\n"
                         f"次回更新: <t:{new_next_ts}:R>"
                     ),
                     color=discord.Color.gold(),
@@ -867,7 +867,7 @@ def build_sub_role_embed(
     )
     embed.add_field(
         name="現在の所持タドコイン",
-        value=f"**{balance:,}** <:TADOCOIN_TEMP:1574811641042698320>",
+        value=f"**{balance:,}** <:tadocoin:1575197619569958942>",
         inline=False,
     )
     lines: list[str] = []

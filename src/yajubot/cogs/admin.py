@@ -212,7 +212,7 @@ def build_tadocoin_excluded_embed(settings: GuildSettings) -> discord.Embed:
         else "未設定（全チャンネルでチャット獲得有効）"
     )
     embed = discord.Embed(
-        title="<:TADOCOIN_TEMP:1574811641042698320> タドコイン獲得例外チャンネル設定",
+        title="<:tadocoin:1575197619569958942> タドコイン獲得例外チャンネル設定",
         description=(
             "発言してもタドコインが増えない例外チャンネルを設定するゾ。\n"
             "下の選択メニューから例外にしたいチャンネルを選んでくれよな～（未選択で解除）"
@@ -259,7 +259,7 @@ def build_sub_role_plan_embed(bot: YajuBot, guild_id: int) -> discord.Embed:
     )
     if plans:
         lines = [
-            f"• <@&{rid}> — **{cost:,}** <:TADOCOIN_TEMP:1574811641042698320>/週"
+            f"• <@&{rid}> — **{cost:,}** <:tadocoin:1575197619569958942>/週"
             for rid, cost in plans.items()
         ]
         plan_text = "\n".join(lines)
@@ -989,7 +989,7 @@ class AdminPanelView(discord.ui.View):
             ),
             discord.SelectOption(
                 label="タドコイン獲得例外チャンネル設定",
-                emoji="<:TADOCOIN_TEMP:1574811641042698320>",
+                emoji="<:tadocoin:1575197619569958942>",
                 value="tadocoin_excluded",
             ),
             discord.SelectOption(

@@ -94,7 +94,7 @@ def _apply_shinkei_clear_rewards(
         if reward > 0:
             new_bal = storage.add_tadocoin(game.guild_id, uid, reward)
             lines.append(
-                f"<:TADOCOIN_TEMP:1574811641042698320> **+{reward:,}** タドコイン獲得！（{rate_label} / 所持: **{new_bal:,}**）"
+                f"<:tadocoin:1575197619569958942> **+{reward:,}** タドコイン獲得！（{rate_label} / 所持: **{new_bal:,}**）"
             )
         if is_best:
             lines.append("🏆 **自己ベストタイム更新！**（`/leaderboard` に記録されたゾ）")
@@ -107,7 +107,7 @@ def _apply_shinkei_clear_rewards(
                 storage.add_tadocoin(game.guild_id, uid, reward)
                 mentions.append(f"<@{uid}>")
             lines.append(
-                f"<:TADOCOIN_TEMP:1574811641042698320> 勝者 {' '.join(mentions)} に **+{reward:,}** タドコイン！（{rate_label}）"
+                f"<:tadocoin:1575197619569958942> 勝者 {' '.join(mentions)} に **+{reward:,}** タドコイン！（{rate_label}）"
             )
             losers = [uid for uid in game.players if uid not in winners]
             loser_reward = reward // 3
@@ -117,7 +117,7 @@ def _apply_shinkei_clear_rewards(
                     storage.add_tadocoin(game.guild_id, uid, loser_reward)
                     loser_mentions.append(f"<@{uid}>")
                 lines.append(
-                    f"<:TADOCOIN_TEMP:1574811641042698320> 敗者 {' '.join(loser_mentions)} に **+{loser_reward:,}** タドコイン！"
+                    f"<:tadocoin:1575197619569958942> 敗者 {' '.join(loser_mentions)} に **+{loser_reward:,}** タドコイン！"
                 )
     return "\n".join(lines)
 
