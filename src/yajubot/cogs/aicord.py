@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import logging
-import secrets
-import time
 from collections import deque
-from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlencode, urlparse
 
 import aiohttp
-from aiohttp import web
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -22,36 +15,16 @@ from yajubot.bot import YajuBot
 
 logger = logging.getLogger(__name__)
 
-AICORD_AUTHORIZE_URL = "https://aicordapp.com/oauth/authorize"
-AICORD_TOKEN_URL = "https://aicordapp.com/api/v1/oauth/token"
 AICORD_CHAT_URL = "https://aicordapp.com/api/v1/chat"
 AICORD_ACCOUNT_URL = "https://aicordapp.com/api/v1/account"
-AICORD_SCOPES = "account:read characters:read characters:use cores:use"
 
-DEFAULT_REDIRECT_URI = "http://localhost:8765/aicord/callback"
 MAX_HISTORY_TURNS = 20
-OAUTH_STATE_TTL_SECONDS = 600.0
 DISCORD_MESSAGE_MAX_LENGTH = 2000
 
 AICORD_CHARACTERS: dict[str, tuple[str, str]] = {
     "dokachan": ("df932593-d15d-4d2c-8dc8-9f455fcebb03", "AIどかちゃん"),
     "takuya": ("e8df0cf2-8387-4d22-8f9d-b311afd49156", "AI拓也"),
 }
-
-
-@dataclass(slots=True)
-class _PendingOAuthState:
-    user_id: int
-    code_verifier: str
-    redirect_uri: str
-    created_at: float
-
-
-def _generate_pkce_pair() -> tuple[str, str]:
-    verifier = secrets.token_urlsafe(64)[:96]
-    digest = hashlib.sha256(verifier.encode("ascii")).digest()
-    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-    return verifier, challenge
 
 
 def _split_discord_message(text: str, limit: int = DISCORD_MESSAGE_MAX_LENGTH) -> list[str]:
@@ -73,14 +46,48 @@ def _split_discord_message(text: str, limit: int = DISCORD_MESSAGE_MAX_LENGTH) -
     return chunks
 
 
-class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICord キャラクター対話の設定・ログイン"):
-    """AICord の OAuth 認証とキャラクター対話を提供する Cog。"""
+class AICordTokenModal(discord.ui.Modal, title="AICord API トークン登録"):
+    """ユーザー自身の AICord API トークンを登録するモーダル。"""
+
+    token_input: discord.ui.TextInput = discord.ui.TextInput(
+        label="AICord API トークン",
+        placeholder="ここに自分の AICord API トークンを貼り付け",
+        style=discord.TextStyle.short,
+        required=True,
+        max_length=512,
+    )
+
+    def __init__(self, cog: AICordCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw_token = self.token_input.value.strip()
+        if raw_token.lower().startswith("bearer "):
+            raw_token = raw_token[7:].strip()
+        if not raw_token:
+            await interaction.response.send_message(
+                "トークンが空だゾ。", ephemeral=True
+            )
+            return
+
+        self.cog.bot.storage.set_aicord_user_token(interaction.user.id, raw_token)
+        await interaction.response.send_message(
+            "AICord API トークンを暗号化して保存したゾ！これで対話チャンネルで会話できるゾ。",
+            ephemeral=True,
+        )
+
+
+class AICordCog(
+    commands.GroupCog,
+    group_name="aicord",
+    group_description="AICord キャラクター対話の設定・トークン登録",
+):
+    """AICord のユーザー別トークン登録とキャラクター対話を提供する Cog。"""
 
     def __init__(self, bot: YajuBot) -> None:
         self.bot = bot
         self._http_session: aiohttp.ClientSession | None = None
-        self._oauth_runner: web.AppRunner | None = None
-        self._pending_states: dict[str, _PendingOAuthState] = {}
         # (guild_id, channel_id, user_id) -> deque[{"role": ..., "content": ...}]
         self._histories: dict[tuple[int, int, int], deque[dict[str, str]]] = {}
         # user_id -> {"requests": int, "cores_used": float, "total_tokens": int}
@@ -90,153 +97,38 @@ class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICor
         self._http_session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=60)
         )
-        await self._start_oauth_callback_server()
 
     async def cog_unload(self) -> None:
-        if self._oauth_runner is not None:
-            await self._oauth_runner.cleanup()
-            self._oauth_runner = None
         if self._http_session is not None:
             await self._http_session.close()
             self._http_session = None
 
-    def _get_redirect_uri(self) -> str:
-        return self.bot.config.aicord_redirect_uri or DEFAULT_REDIRECT_URI
-
-    async def _start_oauth_callback_server(self) -> None:
-        if not self.bot.config.aicord_client_id:
-            return
-        parsed = urlparse(self._get_redirect_uri())
-        host = parsed.hostname or "0.0.0.0"
-        port = parsed.port or 8765
-        path = parsed.path or "/aicord/callback"
-
-        app = web.Application()
-        app.router.add_get(path, self._handle_oauth_callback)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        try:
-            site = web.TCPSite(runner, host=host, port=port)
-            await site.start()
-            self._oauth_runner = runner
-            logger.info("AICord OAuth コールバックサーバーを起動しました: %s:%s%s", host, port, path)
-        except OSError as exc:
-            logger.warning("AICord OAuth コールバックサーバーの起動に失敗しました: %s", exc)
-            await runner.cleanup()
-
-    async def _handle_oauth_callback(self, request: web.Request) -> web.Response:
-        error = request.query.get("error")
-        if error:
-            return web.Response(
-                text=f"AICord 認証がキャンセルまたは失敗しました: {error}",
-                status=400,
-            )
-
-        code = request.query.get("code")
-        state = request.query.get("state")
-        if not code or not state:
-            return web.Response(text="パラメータが不足しています。", status=400)
-
-        pending = self._pending_states.pop(state, None)
-        if pending is None or (time.monotonic() - pending.created_at) > OAUTH_STATE_TTL_SECONDS:
-            return web.Response(
-                text="認証セッションの有効期限が切れています。Discord で /aicord login をやり直してください。",
-                status=400,
-            )
-
-        client_id = self.bot.config.aicord_client_id
-        if not client_id or self._http_session is None:
-            return web.Response(text="Bot の OAuth 設定が未完了です。", status=500)
-
-        payload: dict[str, str] = {
-            "grant_type": "authorization_code",
-            "client_id": client_id,
-            "code": code,
-            "redirect_uri": pending.redirect_uri,
-            "code_verifier": pending.code_verifier,
-        }
-        if self.bot.config.aicord_client_secret:
-            payload["client_secret"] = self.bot.config.aicord_client_secret
-
-        try:
-            async with self._http_session.post(AICORD_TOKEN_URL, data=payload) as resp:
-                data = await resp.json(content_type=None)
-                if resp.status >= 400:
-                    logger.warning("AICord トークン交換失敗 (%s): %s", resp.status, data)
-                    return web.Response(
-                        text=f"トークン取得に失敗しました (HTTP {resp.status})。",
-                        status=400,
-                    )
-        except Exception as exc:
-            logger.warning("AICord トークン交換中にエラー: %s", exc)
-            return web.Response(text="トークン取得中に通信エラーが発生しました。", status=502)
-
-        access_token = data.get("access_token") if isinstance(data, dict) else None
-        if not isinstance(access_token, str) or not access_token:
-            return web.Response(text="アクセストークンが応答に含まれていませんでした。", status=502)
-
-        self.bot.storage.set_aicord_user_token(pending.user_id, access_token)
-        return web.Response(
-            text="AICord の認証が完了しました！このタブを閉じて Discord に戻ってください。",
-            content_type="text/plain; charset=utf-8",
-        )
-
-    @app_commands.command(name="login", description="自分の AICord アカウントと連携するゾ（クレジットは本人消費）")
+    @app_commands.command(
+        name="login",
+        description="自分の AICord API トークンを登録するゾ（クレジットは本人消費）",
+    )
     async def login_cmd(self, interaction: discord.Interaction) -> None:
-        client_id = self.bot.config.aicord_client_id
-        if not client_id:
-            await interaction.response.send_message(
-                "Bot 側に `AICORD_CLIENT_ID` が設定されていないゾ。管理者に連絡してくれよな～",
-                ephemeral=True,
-            )
-            return
+        await interaction.response.send_modal(AICordTokenModal(self))
 
-        now = time.monotonic()
-        stale = [
-            k for k, v in self._pending_states.items() if now - v.created_at > OAUTH_STATE_TTL_SECONDS
-        ]
-        for k in stale:
-            del self._pending_states[k]
-
-        verifier, challenge = _generate_pkce_pair()
-        state = secrets.token_urlsafe(24)
-        redirect_uri = self._get_redirect_uri()
-        self._pending_states[state] = _PendingOAuthState(
-            user_id=interaction.user.id,
-            code_verifier=verifier,
-            redirect_uri=redirect_uri,
-            created_at=now,
-        )
-
-        params = urlencode(
-            {
-                "client_id": client_id,
-                "redirect_uri": redirect_uri,
-                "response_type": "code",
-                "code_challenge": challenge,
-                "code_challenge_method": "S256",
-                "state": state,
-                "scope": AICORD_SCOPES,
-            }
-        )
-        auth_url = f"{AICORD_AUTHORIZE_URL}?{params}"
-        view = discord.ui.View()
-        view.add_item(discord.ui.Button(label="AICord でログイン", url=auth_url))
-        await interaction.response.send_message(
-            "下のボタンから AICord にログインしてくれよな～（有効期限 10 分）",
-            view=view,
-            ephemeral=True,
-        )
-
-    @app_commands.command(name="logout", description="保存されている AICord アカウント連携を解除するゾ")
+    @app_commands.command(
+        name="logout",
+        description="保存されている AICord API トークンを削除するゾ",
+    )
     async def logout_cmd(self, interaction: discord.Interaction) -> None:
         deleted = self.bot.storage.delete_aicord_user_token(interaction.user.id)
         if deleted:
-            await interaction.response.send_message("AICord の連携を解除したゾ。", ephemeral=True)
+            await interaction.response.send_message(
+                "AICord のトークンを削除したゾ。", ephemeral=True
+            )
         else:
-            await interaction.response.send_message("まだ AICord と連携されていないゾ。", ephemeral=True)
+            await interaction.response.send_message(
+                "まだ AICord トークンが登録されていないゾ。", ephemeral=True
+            )
 
-    @app_commands.command(name="set", description="指定チャンネルで対話する AICord キャラクターを設定するゾ")
+    @app_commands.command(
+        name="set",
+        description="指定チャンネルで対話する AICord キャラクターを設定するゾ",
+    )
     @app_commands.describe(
         channel="対話を有効にするテキストチャンネル",
         character="使用するキャラクター",
@@ -266,7 +158,10 @@ class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICor
             ephemeral=True,
         )
 
-    @app_commands.command(name="remove", description="指定チャンネルの AICord 対話設定を解除するゾ")
+    @app_commands.command(
+        name="remove",
+        description="指定チャンネルの AICord 対話設定を解除するゾ",
+    )
     @app_commands.describe(channel="設定を解除するテキストチャンネル")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.guild_only()
@@ -275,7 +170,9 @@ class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICor
     ) -> None:
         if interaction.guild is None:
             return
-        removed = self.bot.storage.remove_aicord_channel(interaction.guild.id, channel.id)
+        removed = self.bot.storage.remove_aicord_channel(
+            interaction.guild.id, channel.id
+        )
         if removed:
             await interaction.response.send_message(
                 f"{channel.mention} の AICord 対話設定を解除したゾ。", ephemeral=True
@@ -285,7 +182,10 @@ class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICor
                 f"{channel.mention} には対話設定が登録されていないゾ。", ephemeral=True
             )
 
-    @app_commands.command(name="status", description="このサーバーの AICord 対話設定一覧を表示するゾ")
+    @app_commands.command(
+        name="status",
+        description="このサーバーの AICord 対話設定一覧を表示するゾ",
+    )
     @app_commands.guild_only()
     async def status_cmd(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
@@ -293,18 +193,25 @@ class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICor
         rows = self.bot.storage.list_aicord_channels(interaction.guild.id)
         if not rows:
             await interaction.response.send_message(
-                "このサーバーには AICord 対話チャンネルが設定されていないゾ。", ephemeral=True
+                "このサーバーには AICord 対話チャンネルが設定されていないゾ。",
+                ephemeral=True,
             )
             return
-        lines = [f"<#{ch_id}> → **{char_name}** (`{char_id}`)" for ch_id, char_id, char_name in rows]
+        lines = [
+            f"<#{ch_id}> → **{char_name}** (`{char_id}`)"
+            for ch_id, char_id, char_name in rows
+        ]
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
-    @app_commands.command(name="usage", description="自分の AICord クレジット残高・使用状況を確認するゾ")
+    @app_commands.command(
+        name="usage",
+        description="自分の AICord クレジット残高・使用状況を確認するゾ",
+    )
     async def usage_cmd(self, interaction: discord.Interaction) -> None:
         token = self.bot.storage.get_aicord_user_token(interaction.user.id)
         if not token:
             await interaction.response.send_message(
-                "AICord と未連携だゾ！先に `/aicord login` でログインしてくれよな～",
+                "AICord トークンが未登録だゾ！先に `/aicord login` で登録してくれよな～",
                 ephemeral=True,
             )
             return
@@ -327,7 +234,7 @@ class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICor
                                 account_lines.append(f"残高 ({key}): **{acc[key]}**")
                     elif resp.status == 401:
                         await interaction.followup.send(
-                            "AICord の認証が切れているゾ。`/aicord login` で再ログインしてくれよな～",
+                            "AICord のトークンが無効または期限切れだゾ。`/aicord login` で再登録してくれよな～",
                             ephemeral=True,
                         )
                         return
@@ -353,7 +260,9 @@ class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICor
         if not isinstance(message.channel, (discord.TextChannel, discord.Thread)):
             return
 
-        config = self.bot.storage.get_aicord_channel(message.guild.id, message.channel.id)
+        config = self.bot.storage.get_aicord_channel(
+            message.guild.id, message.channel.id
+        )
         if config is None:
             return
         character_id, _character_name = config
@@ -374,7 +283,7 @@ class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICor
         token = self.bot.storage.get_aicord_user_token(message.author.id)
         if not token:
             await message.reply(
-                "AICord と未連携だゾ！先に `/aicord login` でログインしてくれよな～",
+                "AICord トークンが未登録だゾ！先に `/aicord login` で登録してくれよな～",
                 mention_author=False,
             )
             return
@@ -392,7 +301,9 @@ class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICor
             ref_msg = message.reference.resolved
             if not isinstance(ref_msg, discord.Message):
                 try:
-                    ref_msg = await message.channel.fetch_message(message.reference.message_id)
+                    ref_msg = await message.channel.fetch_message(
+                        message.reference.message_id
+                    )
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     ref_msg = None
             if ref_msg is not None and ref_msg.content.strip():
@@ -418,7 +329,7 @@ class AICordCog(commands.GroupCog, group_name="aicord", group_description="AICor
                 ) as resp:
                     if resp.status == 401:
                         await message.reply(
-                            "AICord の認証が切れているゾ。`/aicord login` で再ログインしてくれよな～",
+                            "AICord のトークンが無効だゾ。`/aicord login` で再登録してくれよな～",
                             mention_author=False,
                         )
                         return
