@@ -31,6 +31,7 @@ SHINKEI_REWARD_SPECS: dict[str, ShinkeiRewardSpec] = {
     "normal": ShinkeiRewardSpec(base_amount=160, fast_moves=18, normal_moves=23, slow_moves=27),
     "hard": ShinkeiRewardSpec(base_amount=280, fast_moves=25, normal_moves=29, slow_moves=35),
     "ikisugi": ShinkeiRewardSpec(base_amount=810, fast_moves=40, normal_moves=55, slow_moves=65),
+    "super_ikisugi": ShinkeiRewardSpec(base_amount=1919, fast_moves=40, normal_moves=55, slow_moves=65),
 }
 
 
@@ -40,6 +41,7 @@ PERFECT_CLEAR_REWARDS: dict[str, tuple[int, int]] = {
     "normal": (8, 81000),
     "hard": (12, 93150),
     "ikisugi": (12, 1919810),
+    "super_ikisugi": (12, 3643640),
 }
 
 
@@ -132,6 +134,8 @@ class DifficultySpec:
     cols: int
     reveal_seconds: float
     shuffle_chance: float = 0.0
+    forced_shuffle_interval: int = 0
+    timeout_seconds: float = 900.0
 
     @property
     def total_tiles(self) -> int:
@@ -179,6 +183,16 @@ DIFFICULTIES: dict[str, DifficultySpec] = {
         cols=5,
         reveal_seconds=0.8,
         shuffle_chance=0.1919,
+    ),
+    "super_ikisugi": DifficultySpec(
+        key="super_ikisugi",
+        label="超・ネクタイイキスギ",
+        rows=5,
+        cols=5,
+        reveal_seconds=0.5,
+        shuffle_chance=0.20,
+        forced_shuffle_interval=7,
+        timeout_seconds=480.0,
     ),
 }
 
@@ -301,7 +315,7 @@ class ShinkeiBoardView(discord.ui.View):
     """神経衰弱盤面 View。"""
 
     def __init__(self, game: ShinkeiGame) -> None:
-        super().__init__(timeout=900)
+        super().__init__(timeout=game.difficulty.timeout_seconds)
         self.game = game
         self._card_buttons: dict[int, discord.ui.Button] = {}
         self._quit_button: discord.ui.Button | None = None
@@ -577,7 +591,13 @@ class ShinkeiBoardView(discord.ui.View):
             self.game.second_pick = None
             self.game.is_busy = False
             shuffled = False
-            if (
+            forced_interval = self.game.difficulty.forced_shuffle_interval
+            is_forced_shuffle = (
+                forced_interval > 0
+                and self.game.moves > 0
+                and self.game.moves % forced_interval == 0
+            )
+            if is_forced_shuffle or (
                 self.game.difficulty.shuffle_chance > 0.0
                 and random.random() < self.game.difficulty.shuffle_chance
             ):
@@ -592,7 +612,16 @@ class ShinkeiBoardView(discord.ui.View):
                 else "次のカードを選んでくれよ〜（マジキチスマイル）"
             )
             if shuffled:
-                note = "🌪️ **イキスギミック発動！残りのカードがシャッフルされたゾ！！（絶望）**\n" + note
+                if is_forced_shuffle:
+                    note = (
+                        f"🌪️ **{forced_interval}ターン経過！強制シャッフル発動！！（絶望）**\n"
+                        + note
+                    )
+                else:
+                    note = (
+                        "🌪️ **イキスギミック発動！残りのカードがシャッフルされたゾ！！（絶望）**\n"
+                        + note
+                    )
             try:
                 await interaction.edit_original_response(
                     embed=self.build_embed(note), view=self
@@ -875,6 +904,13 @@ IKISUGI_GIMMICK_NOTE = (
     "・外すと **15%の確率** で残りのカードが勝手に **シャッフル** されるゾ。何度もリピートして見てくれ（絶望）\n"
     "・おっ、大丈夫か大丈夫か？諦めたい時は真ん中の「🏳️」から逃げよう。 馬鹿野郎お前俺は勝つぞお前！"
 )
+SUPER_IKISUGI_GIMMICK_NOTE = (
+    "\n\n **超・ネクタイイキスギミック**\n"
+    "・外した時の猶予時間はわずか **0.5秒**！\n"
+    "・外すと **20%の確率** で残りのカードが **シャッフル** されるゾ。\n"
+    "・さらに **7ターンごと** に残りのカードが **強制シャッフル** されるゾ！\n"
+    "・制限時間は **8分** だゾ。急いでクリアしてくれよな〜！"
+)
 
 
 class ShinkeiDifficultySelectView(discord.ui.View):
@@ -904,7 +940,12 @@ class ShinkeiDifficultySelectView(discord.ui.View):
             return
         self.stop()
         mode_view = ShinkeiModeSelectView(self.host_id, diff)
-        note = IKISUGI_GIMMICK_NOTE if diff.key == "ikisugi" else ""
+        if diff.key == "ikisugi":
+            note = IKISUGI_GIMMICK_NOTE
+        elif diff.key == "super_ikisugi":
+            note = SUPER_IKISUGI_GIMMICK_NOTE
+        else:
+            note = ""
         await interaction.response.edit_message(
             content=f"🃏 **神経衰弱（{diff.rows}×{diff.cols} / {diff.label}）**\nプレイモードを選択して、六尺、サポーターになって、H、しよう（提案）{note}",
             view=mode_view,
@@ -937,6 +978,16 @@ class ShinkeiDifficultySelectView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         await self._choose(interaction, "ikisugi")
+
+    @discord.ui.button(
+        label="超・ネクタイイキスギ (5×5、超鬼畜ギミック)",
+        style=discord.ButtonStyle.danger,
+        row=2,
+    )
+    async def super_ikisugi_btn(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await self._choose(interaction, "super_ikisugi")
 
 
 class ShinkeiCog(commands.Cog):
