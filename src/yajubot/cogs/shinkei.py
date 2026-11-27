@@ -317,6 +317,7 @@ class ShinkeiBoardView(discord.ui.View):
     def __init__(self, game: ShinkeiGame) -> None:
         super().__init__(timeout=game.difficulty.timeout_seconds)
         self.game = game
+        self._deadline_unix: int = int(time.time() + game.difficulty.timeout_seconds)
         self._card_buttons: dict[int, discord.ui.Button] = {}
         self._quit_button: discord.ui.Button | None = None
         self._init_buttons()
@@ -428,13 +429,23 @@ class ShinkeiBoardView(discord.ui.View):
         embed = discord.Embed(
             title=f"🃏 神経衰弱（{diff.rows}×{diff.cols} / {diff.label}）",
             description=status_note or "カードを2枚めくって同じ絵文字を揃えなきゃ（使命感）",
-            color=discord.Color.red() if diff.key == "ikisugi" else discord.Color.blurple(),
+            color=(
+                discord.Color.red()
+                if diff.key in ("ikisugi", "super_ikisugi")
+                else discord.Color.blurple()
+            ),
         )
         embed.add_field(
             name="進捗",
             value=f"{self.game.matched_pairs} / {diff.required_pairs} ペア（{self.game.moves}手）",
             inline=True,
         )
+        if diff.key == "super_ikisugi":
+            embed.add_field(
+                name="制限時間",
+                value=f"<t:{self._deadline_unix}:T>（<t:{self._deadline_unix}:R>）",
+                inline=True,
+            )
         if self.game.is_multiplayer:
             embed.add_field(
                 name="現在の手番",
@@ -891,7 +902,14 @@ class ShinkeiModeSelectView(discord.ui.View):
             )
             return
         self.stop()
-        view = ShinkeiDifficultySelectView(self.host_id)
+        unlocked = False
+        if interaction.guild is not None and hasattr(interaction.client, "storage"):
+            unlocked = interaction.client.storage.has_cleared_shinkei(
+                interaction.guild.id, "ikisugi", self.host_id
+            )
+        view = ShinkeiDifficultySelectView(
+            self.host_id, unlocked_super_ikisugi=unlocked
+        )
         await interaction.response.edit_message(
             content="🃏 **神経衰弱**\n難易度を選択してください、なんでもしますから（なんでもするとは言ってない）",
             view=view,
@@ -902,7 +920,8 @@ IKISUGI_GIMMICK_NOTE = (
     "\n\n **イキスギミックを説明して差し上げろ**\n"
     "・まずうちさぁ…外した時の猶予時間、**0.8秒**しかないんだけど…（脳みそ）焼いてかない？\n"
     "・外すと **15%の確率** で残りのカードが勝手に **シャッフル** されるゾ。何度もリピートして見てくれ（絶望）\n"
-    "・おっ、大丈夫か大丈夫か？諦めたい時は真ん中の「🏳️」から逃げよう。 馬鹿野郎お前俺は勝つぞお前！"
+    "・おっ、大丈夫か大丈夫か？諦めたい時は真ん中の「🏳️」から逃げよう。 馬鹿野郎お前俺は勝つぞお前！\n"
+    "・※クリアするとさらにキツい難易度が解放されるゾ…（震え声）"
 )
 SUPER_IKISUGI_GIMMICK_NOTE = (
     "\n\n **超・ネクタイイキスギミック**\n"
@@ -916,9 +935,13 @@ SUPER_IKISUGI_GIMMICK_NOTE = (
 class ShinkeiDifficultySelectView(discord.ui.View):
     """難易度選択 View。"""
 
-    def __init__(self, host_id: int) -> None:
+    def __init__(
+        self, host_id: int, *, unlocked_super_ikisugi: bool = False
+    ) -> None:
         super().__init__(timeout=120)
         self.host_id = host_id
+        if not unlocked_super_ikisugi:
+            self.remove_item(self.super_ikisugi_btn)
 
     async def _choose(
         self, interaction: discord.Interaction, diff_key: str
@@ -1009,7 +1032,12 @@ class ShinkeiCog(commands.Cog):
             )
             return
 
-        view = ShinkeiDifficultySelectView(interaction.user.id)
+        unlocked = self.bot.storage.has_cleared_shinkei(
+            guild.id, "ikisugi", interaction.user.id
+        )
+        view = ShinkeiDifficultySelectView(
+            interaction.user.id, unlocked_super_ikisugi=unlocked
+        )
         await interaction.response.send_message(
             "🃏 **神経衰弱**\n難易度を選択してください、なんでもしますから（なんでもするとは言ってない）",
             view=view,

@@ -399,10 +399,16 @@ class TadocoinCog(commands.Cog):
 
         settings = self.bot.storage.get_guild_settings(message.guild.id)
         excluded = set(settings.tadocoin_excluded_channel_ids)
-        if message.channel.id in excluded:
-            return
         parent_id = getattr(message.channel, "parent_id", None)
-        if parent_id is not None and parent_id in excluded:
+        is_listed = message.channel.id in excluded or (
+            parent_id is not None and parent_id in excluded
+        )
+        is_blocked = (
+            not is_listed
+            if settings.tadocoin_excluded_channels_inverted
+            else is_listed
+        )
+        if is_blocked:
             return
 
         self._chat_cooldowns[key] = now

@@ -228,7 +228,17 @@ class BinjouCog(commands.Cog):
             return
 
         settings = self.bot.storage.get_guild_settings(message.guild.id)
-        if message.channel.id not in settings.binjou_channel_ids:
+        in_binjou = message.channel.id in settings.binjou_channel_ids
+        is_binjou_enabled = (
+            not in_binjou if settings.binjou_channels_inverted else in_binjou
+        )
+        if not is_binjou_enabled:
+            return
+        if re.search(r"南佳也にそっくりよね", message.content or ""):
+            try:
+                await message.reply("⚠️全く似ていません⚠️")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
             return
         if settings.binjou_probability <= 0.0:
             return

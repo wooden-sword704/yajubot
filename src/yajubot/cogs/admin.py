@@ -496,6 +496,30 @@ class RoleSettingView(discord.ui.View):
             embed=build_role_setting_embed(settings, self.mode), view=self
         )
 
+    @discord.ui.button(
+        label="反転モード切替", emoji="🔄", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def toggle_invert_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        current = self.bot.storage.get_guild_settings(self.guild_id)
+        settings = self.bot.storage.set_tadocoin_excluded_channels_inverted(
+            self.guild_id, not current.tadocoin_excluded_channels_inverted
+        )
+        mode_text = (
+            "ON（選択チャンネル**のみ**獲得可能）"
+            if settings.tadocoin_excluded_channels_inverted
+            else "OFF（選択チャンネルを除外）"
+        )
+        await interaction.response.edit_message(
+            content=f"🔄 反転モード: **{mode_text}**",
+            embed=build_tadocoin_excluded_embed(settings),
+            view=self,
+        )
+
     @discord.ui.button(label="◀ パネルに戻る", style=discord.ButtonStyle.primary, row=1)
     async def back_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
@@ -540,6 +564,30 @@ class LogChannelSettingView(discord.ui.View):
         settings = self.bot.storage.set_log_channel(self.guild_id, channel_id)
         await interaction.response.edit_message(
             embed=build_log_channel_setting_embed(settings), view=self
+        )
+
+    @discord.ui.button(
+        label="反転モード切替", emoji="🔄", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def toggle_invert_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        current = self.bot.storage.get_guild_settings(self.guild_id)
+        settings = self.bot.storage.set_tadocoin_excluded_channels_inverted(
+            self.guild_id, not current.tadocoin_excluded_channels_inverted
+        )
+        mode_text = (
+            "ON（選択チャンネル**のみ**獲得可能）"
+            if settings.tadocoin_excluded_channels_inverted
+            else "OFF（選択チャンネルを除外）"
+        )
+        await interaction.response.edit_message(
+            content=f"🔄 反転モード: **{mode_text}**",
+            embed=build_tadocoin_excluded_embed(settings),
+            view=self,
         )
 
     @discord.ui.button(label="◀ パネルに戻る", style=discord.ButtonStyle.primary, row=1)
@@ -697,6 +745,30 @@ class SelfRoleSettingView(discord.ui.View):
             ephemeral=True,
         )
 
+    @discord.ui.button(
+        label="反転モード切替", emoji="🔄", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def toggle_invert_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        current = self.bot.storage.get_guild_settings(self.guild_id)
+        settings = self.bot.storage.set_tadocoin_excluded_channels_inverted(
+            self.guild_id, not current.tadocoin_excluded_channels_inverted
+        )
+        mode_text = (
+            "ON（選択チャンネル**のみ**獲得可能）"
+            if settings.tadocoin_excluded_channels_inverted
+            else "OFF（選択チャンネルを除外）"
+        )
+        await interaction.response.edit_message(
+            content=f"🔄 反転モード: **{mode_text}**",
+            embed=build_tadocoin_excluded_embed(settings),
+            view=self,
+        )
+
     @discord.ui.button(label="◀ パネルに戻る", style=discord.ButtonStyle.primary, row=1)
     async def back_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
@@ -743,6 +815,30 @@ class TadocoinExcludedChannelView(discord.ui.View):
         )
         await interaction.response.edit_message(
             embed=build_tadocoin_excluded_embed(settings), view=self
+        )
+
+    @discord.ui.button(
+        label="反転モード切替", emoji="🔄", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def toggle_invert_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        current = self.bot.storage.get_guild_settings(self.guild_id)
+        settings = self.bot.storage.set_tadocoin_excluded_channels_inverted(
+            self.guild_id, not current.tadocoin_excluded_channels_inverted
+        )
+        mode_text = (
+            "ON（選択チャンネル**のみ**獲得可能）"
+            if settings.tadocoin_excluded_channels_inverted
+            else "OFF（選択チャンネルを除外）"
+        )
+        await interaction.response.edit_message(
+            content=f"🔄 反転モード: **{mode_text}**",
+            embed=build_tadocoin_excluded_embed(settings),
+            view=self,
         )
 
     @discord.ui.button(label="◀ パネルに戻る", style=discord.ButtonStyle.primary, row=1)
@@ -835,6 +931,30 @@ class TadocoinOverrideView(discord.ui.View):
         target = select.values[0]
         await interaction.response.send_modal(
             TadocoinOverrideModal(self.bot, self.guild_id, target, self)
+        )
+
+    @discord.ui.button(
+        label="反転モード切替", emoji="🔄", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def toggle_invert_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        current = self.bot.storage.get_guild_settings(self.guild_id)
+        settings = self.bot.storage.set_tadocoin_excluded_channels_inverted(
+            self.guild_id, not current.tadocoin_excluded_channels_inverted
+        )
+        mode_text = (
+            "ON（選択チャンネル**のみ**獲得可能）"
+            if settings.tadocoin_excluded_channels_inverted
+            else "OFF（選択チャンネルを除外）"
+        )
+        await interaction.response.edit_message(
+            content=f"🔄 反転モード: **{mode_text}**",
+            embed=build_tadocoin_excluded_embed(settings),
+            view=self,
         )
 
     @discord.ui.button(label="◀ パネルに戻る", style=discord.ButtonStyle.primary, row=1)
@@ -930,6 +1050,30 @@ class SubRolePlanView(discord.ui.View):
             return
         await interaction.response.send_modal(
             SubRoleCostModal(self.bot, self.guild_id, role, self)
+        )
+
+    @discord.ui.button(
+        label="反転モード切替", emoji="🔄", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def toggle_invert_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        current = self.bot.storage.get_guild_settings(self.guild_id)
+        settings = self.bot.storage.set_tadocoin_excluded_channels_inverted(
+            self.guild_id, not current.tadocoin_excluded_channels_inverted
+        )
+        mode_text = (
+            "ON（選択チャンネル**のみ**獲得可能）"
+            if settings.tadocoin_excluded_channels_inverted
+            else "OFF（選択チャンネルを除外）"
+        )
+        await interaction.response.edit_message(
+            content=f"🔄 反転モード: **{mode_text}**",
+            embed=build_tadocoin_excluded_embed(settings),
+            view=self,
         )
 
     @discord.ui.button(label="◀ パネルに戻る", style=discord.ButtonStyle.primary, row=1)
@@ -1185,6 +1329,30 @@ class BinjouSettingsView(discord.ui.View):
             return
         await interaction.response.send_modal(
             BinjouProbabilityModal(self.bot, self.guild_id, self)
+        )
+
+    @discord.ui.button(
+        label="反転モード切替", emoji="🔄", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def toggle_invert_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not can_manage_bot(interaction.user, self.bot.storage, self.guild_id):
+            await interaction.response.send_message("権限がないゾ。", ephemeral=True)
+            return
+        current = self.bot.storage.get_guild_settings(self.guild_id)
+        settings = self.bot.storage.set_binjou_channels_inverted(
+            self.guild_id, not current.binjou_channels_inverted
+        )
+        mode_text = (
+            "ON（選択チャンネル**以外**で有効）"
+            if settings.binjou_channels_inverted
+            else "OFF（選択チャンネルで有効）"
+        )
+        await interaction.response.edit_message(
+            content=f"🔄 反転モード: **{mode_text}**",
+            embed=build_binjou_settings_embed(settings),
+            view=self,
         )
 
     @discord.ui.button(

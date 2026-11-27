@@ -114,6 +114,8 @@ class GuildSettings:
     stage_mod_role_ids: tuple[int, ...] = ()
     self_assignable_role_ids: tuple[int, ...] = ()
     tadocoin_excluded_channel_ids: tuple[int, ...] = ()
+    binjou_channels_inverted: bool = False
+    tadocoin_excluded_channels_inverted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +322,14 @@ class ProxyStorage:
             if "tadocoin_excluded_channel_ids" not in cols:
                 cur.execute(
                     "ALTER TABLE guild_settings ADD COLUMN tadocoin_excluded_channel_ids TEXT NOT NULL DEFAULT '[]';"
+                )
+            if "binjou_channels_inverted" not in cols:
+                cur.execute(
+                    "ALTER TABLE guild_settings ADD COLUMN binjou_channels_inverted INTEGER NOT NULL DEFAULT 0;"
+                )
+            if "tadocoin_excluded_channels_inverted" not in cols:
+                cur.execute(
+                    "ALTER TABLE guild_settings ADD COLUMN tadocoin_excluded_channels_inverted INTEGER NOT NULL DEFAULT 0;"
                 )
 
             cur.execute(
@@ -562,7 +572,7 @@ class ProxyStorage:
             return cached
         with self._lock:
             row = self._conn.execute(
-                "SELECT proxy_role_ids, admin_role_ids, log_channel_id, binjou_channel_ids, binjou_probability, stage_mod_role_ids, self_assignable_role_ids, tadocoin_excluded_channel_ids FROM guild_settings WHERE guild_id = ?",
+                "SELECT proxy_role_ids, admin_role_ids, log_channel_id, binjou_channel_ids, binjou_probability, stage_mod_role_ids, self_assignable_role_ids, tadocoin_excluded_channel_ids, binjou_channels_inverted, tadocoin_excluded_channels_inverted FROM guild_settings WHERE guild_id = ?",
                 (guild_id,),
             ).fetchone()
         if row is None:
@@ -614,6 +624,10 @@ class ProxyStorage:
             stage_mod_role_ids=stage_mod_ids,
             self_assignable_role_ids=self_assignable_ids,
             tadocoin_excluded_channel_ids=tadocoin_excluded_ids,
+            binjou_channels_inverted=bool(row["binjou_channels_inverted"]),
+            tadocoin_excluded_channels_inverted=bool(
+                row["tadocoin_excluded_channels_inverted"]
+            ),
         )
         if len(self._guild_settings_cache) >= 2000:
             self._guild_settings_cache.clear()
@@ -1009,6 +1023,55 @@ class ProxyStorage:
                 (guild_id, limit),
             ).fetchall()
         return [(int(r["user_id"]), int(r["balance"])) for r in rows]
+
+    def set_binjou_channels_inverted(
+        self, guild_id: int, inverted: bool
+    ) -> GuildSettings:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, binjou_channels_inverted)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    binjou_channels_inverted = excluded.binjou_channels_inverted
+                """,
+                (guild_id, 1 if inverted else 0),
+            )
+            self._conn.commit()
+        self._invalidate_guild_settings(guild_id)
+        return self.get_guild_settings(guild_id)
+
+    def set_tadocoin_excluded_channels_inverted(
+        self, guild_id: int, inverted: bool
+    ) -> GuildSettings:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, tadocoin_excluded_channels_inverted)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    tadocoin_excluded_channels_inverted = excluded.tadocoin_excluded_channels_inverted
+                """,
+                (guild_id, 1 if inverted else 0),
+            )
+            self._conn.commit()
+        self._invalidate_guild_settings(guild_id)
+        return self.get_guild_settings(guild_id)
+
+    def has_cleared_shinkei(
+        self, guild_id: int, difficulty: str, user_id: int
+    ) -> bool:
+        """指定ユーザーが指定難易度の神経衰弱をクリア済みかどうかを返す。"""
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT 1 FROM shinkei_records
+                WHERE guild_id = ? AND difficulty = ? AND user_id = ?
+                LIMIT 1
+                """,
+                (guild_id, difficulty, user_id),
+            ).fetchone()
+            return row is not None
 
     def record_shinkei_clear(
         self,
