@@ -314,14 +314,54 @@ def create_shinkei_game(
 class ShinkeiBoardView(discord.ui.View):
     """神経衰弱盤面 View。"""
 
-    def __init__(self, game: ShinkeiGame) -> None:
+    def __init__(
+        self, game: ShinkeiGame, board_message: discord.Message | None = None
+    ) -> None:
         super().__init__(timeout=game.difficulty.timeout_seconds)
         self.game = game
+        self._board_message: discord.Message | None = board_message
         self._deadline_unix: int = int(time.time() + game.difficulty.timeout_seconds)
+        self._deadline_task: asyncio.Task[None] | None = None
         self._card_buttons: dict[int, discord.ui.Button] = {}
         self._quit_button: discord.ui.Button | None = None
         self._init_buttons()
         self._rebuild_buttons()
+        try:
+            loop = asyncio.get_running_loop()
+            self._deadline_task = loop.create_task(self._wait_for_deadline())
+        except RuntimeError:
+            pass
+
+    def stop(self) -> None:
+        if self._deadline_task is not None and not self._deadline_task.done():
+            self._deadline_task.cancel()
+        super().stop()
+
+    async def _wait_for_deadline(self) -> None:
+        try:
+            await asyncio.sleep(self.game.difficulty.timeout_seconds)
+            await self._expire_game("⏰ **制限時間切れによりゲームが終了しました。**")
+        except asyncio.CancelledError:
+            pass
+
+    async def on_timeout(self) -> None:
+        await self._expire_game("⏰ **時間切れによりゲームが終了しました。**")
+
+    async def _expire_game(self, reason: str) -> None:
+        async with self.game.lock:
+            if self.game.is_finished or self.game.is_aborted:
+                return
+            self.game.is_aborted = True
+            self.game.is_busy = False
+            self._rebuild_buttons()
+            super().stop()
+            if self._board_message is not None:
+                try:
+                    await self._board_message.edit(
+                        embed=self.build_embed(reason), view=self
+                    )
+                except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
+                    pass
 
     def _init_buttons(self) -> None:
         cols = self.game.difficulty.cols
@@ -397,9 +437,10 @@ class ShinkeiBoardView(discord.ui.View):
     ) -> discord.Embed:
         diff = self.game.difficulty
         if self.game.is_aborted:
+            prefix = f"{status_note}\n" if status_note else "ゲームが途中終了されました。"
             return discord.Embed(
-                title=f"神経衰弱 途中終了（{diff.label}）",
-                description=f"ゲームが途中終了されました。（獲得ペア: **{self.game.matched_pairs} / {diff.required_pairs}** / 手数: **{self.game.moves}手**）",
+                title=f"神経衰弱 終了（{diff.label}）",
+                description=f"{prefix}（獲得ペア: **{self.game.matched_pairs} / {diff.required_pairs}** / 手数: **{self.game.moves}手**）",
                 color=discord.Color.dark_grey(),
             )
         if self.game.is_finished:
@@ -491,9 +532,24 @@ class ShinkeiBoardView(discord.ui.View):
     async def _handle_card_click(
         self, interaction: discord.Interaction, card_index: int
     ) -> None:
+        if self._board_message is None and interaction.message is not None:
+            self._board_message = interaction.message
         async with self.game.lock:
             if self.game.is_finished or self.game.is_aborted or self.game.is_busy:
                 await self._safe_defer(interaction)
+                return
+            if time.monotonic() - self.game.started_at >= self.game.difficulty.timeout_seconds:
+                self.game.is_aborted = True
+                self.game.is_busy = False
+                self._rebuild_buttons()
+                self.stop()
+                try:
+                    await interaction.response.edit_message(
+                        embed=self.build_embed("⏰ **制限時間切れによりゲームが終了しました。**"),
+                        view=self,
+                    )
+                except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
+                    pass
                 return
 
             if interaction.user.id != self.game.current_player_id:
@@ -817,7 +873,7 @@ class ShinkeiLobbyView(discord.ui.View):
         except ValueError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
-        board = ShinkeiBoardView(game)
+        board = ShinkeiBoardView(game, board_message=interaction.message)
         self.is_closed = True
         self.stop()
         await interaction.response.edit_message(content=None, embed=board.build_embed(), view=board)
@@ -871,7 +927,7 @@ class ShinkeiModeSelectView(discord.ui.View):
         except ValueError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
-        board = ShinkeiBoardView(game)
+        board = ShinkeiBoardView(game, board_message=interaction.message)
         self.stop()
         await interaction.response.edit_message(content=None, embed=board.build_embed(), view=board)
 
