@@ -138,12 +138,14 @@ class PokerTableView(discord.ui.View):
         """練習モード時、手番が NPC_BOT_ID の間自動でアクションを進める。"""
         if not self.is_practice or self.is_closed:
             return
-        while (
-            not self.is_closed
-            and self.table.phase not in ("WAITING", "SHOWDOWN")
-            and self.table.current_player is not None
-            and self.table.current_player.user_id == NPC_BOT_ID
-        ):
+        for _ in range(32):
+            if (
+                self.is_closed
+                or self.table.phase in ("WAITING", "SHOWDOWN")
+                or self.table.current_player is None
+                or self.table.current_player.user_id != NPC_BOT_ID
+            ):
+                break
             legal = self.table.get_legal_actions(NPC_BOT_ID)
             if legal is None:
                 break
@@ -169,7 +171,12 @@ class PokerTableView(discord.ui.View):
         super().stop()
 
     def _cancel_turn_timer(self) -> None:
-        if self._turn_timer_task is not None and not self._turn_timer_task.done():
+        current = asyncio.current_task()
+        if (
+            self._turn_timer_task is not None
+            and not self._turn_timer_task.done()
+            and self._turn_timer_task is not current
+        ):
             self._turn_timer_task.cancel()
         self._turn_timer_task = None
 
@@ -455,6 +462,22 @@ class PokerTableView(discord.ui.View):
 
         return embed
 
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item,
+    ) -> None:
+        logger.exception("PokerTableView でエラーが発生しました: %s", error)
+        msg = "ポーカーの処理中にエラーが発生したゾ。もう一度試してくれよな〜。"
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except (discord.NotFound, discord.HTTPException):
+            pass
+
     async def handle_player_action(
         self,
         interaction: discord.Interaction,
@@ -487,9 +510,12 @@ class PokerTableView(discord.ui.View):
                 return
 
             self._post_action_housekeeping()
-            await interaction.response.edit_message(
-                embed=self.build_embed(), view=self
-            )
+            try:
+                await interaction.response.edit_message(
+                    embed=self.build_embed(), view=self
+                )
+            except (discord.NotFound, discord.HTTPException) as exc:
+                logger.warning("ポーカー盤面の更新に失敗しました: %s", exc)
 
     async def _on_check_or_call(self, interaction: discord.Interaction) -> None:
         cp = self.table.current_player
@@ -577,9 +603,12 @@ class PokerTableView(discord.ui.View):
                 return
 
             self._post_action_housekeeping()
-            await interaction.response.edit_message(
-                embed=self.build_embed(), view=self
-            )
+            try:
+                await interaction.response.edit_message(
+                    embed=self.build_embed(), view=self
+                )
+            except (discord.NotFound, discord.HTTPException) as exc:
+                logger.warning("ポーカー盤面の更新に失敗しました: %s", exc)
 
     async def _on_cashout_leave(self, interaction: discord.Interaction) -> None:
         async with self.lock:
