@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
 import time
@@ -23,6 +24,80 @@ LAUNCHER_THROTTLE_SECONDS = 5.0
 PROXY_USER_COOLDOWN_SECONDS = 2.0
 MAX_CACHE_ENTRIES = 5000
 DISCORD_MESSAGE_MAX_LENGTH = 2000
+MAX_MEDIA_SIZE_BYTES = 10 * 1024 * 1024
+# VM 月間 100GB 制限のうち、デプロイ・通常通信・コンソール用に 20GB を確保し、
+# 残り 80GB を 31 日で割った値を 1 日のメディア中継クォーター（約 2.58GB/日）とする。
+DAILY_MEDIA_QUOTA_BYTES = (80 * 1024 * 1024 * 1024) // 31
+ALLOWED_MEDIA_CONTENT_PREFIXES = ("image/", "video/", "audio/")
+ALLOWED_TEXT_CONTENT_TYPES = (
+    "text/plain",
+    "text/csv",
+    "text/markdown",
+    "text/tab-separated-values",
+)
+ALLOWED_MEDIA_EXTENSIONS = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".tiff",
+    ".avif",
+    ".mp4",
+    ".mov",
+    ".webm",
+    ".mkv",
+    ".avi",
+    ".mp3",
+    ".wav",
+    ".ogg",
+    ".flac",
+    ".m4a",
+    ".aac",
+    ".txt",
+    ".md",
+    ".csv",
+    ".log",
+)
+BLOCKED_MEDIA_EXTENSIONS = (
+    ".zip",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".tgz",
+    ".bat",
+    ".cmd",
+    ".exe",
+    ".msi",
+    ".ps1",
+    ".sh",
+    ".vbs",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".jar",
+    ".dll",
+    ".scr",
+    ".com",
+    ".pif",
+    ".hta",
+    ".apk",
+    ".dmg",
+    ".pkg",
+    ".deb",
+    ".rpm",
+    ".py",
+    ".rb",
+    ".pl",
+    ".php",
+    ".html",
+    ".htm",
+    ".svg",
+)
 
 # 既存のカスタム絵文字 (<:name:id> や <a:name:id>) またはショートコード (:name:) をマッチング
 EMOJI_TOKEN_PATTERN = re.compile(r"(<a?:[a-zA-Z0-9_]+:\d+>)|:([a-zA-Z0-9_]+):")
@@ -1450,6 +1525,7 @@ class ProxyCog(commands.Cog):
         reply_message: discord.Message | None = None,
         reply_content_override: str | None = None,
         mention_author: bool = True,
+        file: discord.File | None = None,
     ) -> None:
         """Webhook で代替メッセージを送信し、必要に応じて待機ボタンを再送信する。"""
         channel = interaction.channel
@@ -1532,6 +1608,8 @@ class ProxyCog(commands.Cog):
             }
             if thread is not None:
                 send_kwargs["thread"] = thread
+            if file is not None:
+                send_kwargs["file"] = file
 
             sent_msg = await webhook.send(**send_kwargs)
 
@@ -1700,6 +1778,129 @@ class ProxyCog(commands.Cog):
                 await interaction.followup.send(format_ratelimit_message(exc), ephemeral=True)
             elif isinstance(exc, discord.HTTPException):
                 logger.warning("直接代替送信に失敗しました: %s", exc)
+                await interaction.followup.send(
+                    "送信ダメみたいですね（失敗）ちょっと待ってから送りなおしてくれよな～頼むよ～",
+                    ephemeral=True,
+                )
+            else:
+                raise exc
+        else:
+            await interaction.delete_original_response()
+
+    @app_commands.command(
+        name="media",
+        description="画像・動画・音声・テキストをボットが代わりに送信するゾ（最大10MB）。",
+    )
+    @app_commands.describe(
+        file="送信するファイル（画像・動画・音声・テキスト / 最大10MB）",
+        message="ファイルと一緒に送信するテキスト（省略可）",
+    )
+    @app_commands.guild_only()
+    async def media_proxy(
+        self,
+        interaction: discord.Interaction,
+        file: discord.Attachment,
+        message: app_commands.Range[str, 1, 2000] | None = None,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        guild = interaction.guild
+        if channel is None or guild is None:
+            await interaction.followup.send(
+                "サーバー内のチャンネルでだけ利用できるからね。そして天は鳴き、大地は震えるだろうね",
+                ephemeral=True,
+            )
+            return
+
+        filename_lower = file.filename.lower()
+        if filename_lower.endswith(BLOCKED_MEDIA_EXTENSIONS):
+            await interaction.followup.send(
+                "圧縮ファイルや実行可能ファイル、危険・不明な形式のファイルは受け付けないゾ。",
+                ephemeral=True,
+            )
+            return
+
+        raw_content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+        is_allowed_mime = raw_content_type.startswith(ALLOWED_MEDIA_CONTENT_PREFIXES) or (
+            raw_content_type in ALLOWED_TEXT_CONTENT_TYPES
+        )
+        is_allowed_ext = (
+            not raw_content_type or raw_content_type == "application/octet-stream"
+        ) and filename_lower.endswith(ALLOWED_MEDIA_EXTENSIONS)
+
+        if not (is_allowed_mime or is_allowed_ext):
+            await interaction.followup.send(
+                "画像・動画・音声・テキスト以外のファイル形式は受け付けないゾ。",
+                ephemeral=True,
+            )
+            return
+
+        if file.size > MAX_MEDIA_SIZE_BYTES:
+            await interaction.followup.send(
+                "ファイルサイズが大きすぎるゾ（最大 10MB までだゾ）。",
+                ephemeral=True,
+            )
+            return
+
+        # ダウンロードとWebhookアップロードで往復約2倍の通信量を消費する
+        estimated_traffic = file.size * 2
+        used_today = self.bot.storage.get_daily_media_traffic()
+        if used_today + estimated_traffic > DAILY_MEDIA_QUOTA_BYTES:
+            await interaction.followup.send(
+                "本日のメディア送信通信量クォーター上限に達したため、今日はもう添付できないゾ。",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            data = await file.read()
+        except discord.HTTPException as exc:
+            logger.warning("添付ファイルのダウンロードに失敗しました: %s", exc)
+            await interaction.followup.send(
+                "ファイルの読み込みに失敗したゾ。もう一度試してくれよな～",
+                ephemeral=True,
+            )
+            return
+
+        if len(data) > MAX_MEDIA_SIZE_BYTES:
+            await interaction.followup.send(
+                "ファイルサイズが大きすぎるゾ（最大 10MB までだゾ）。",
+                ephemeral=True,
+            )
+            return
+
+        actual_traffic = len(data) * 2
+        used_today = self.bot.storage.get_daily_media_traffic()
+        if used_today + actual_traffic > DAILY_MEDIA_QUOTA_BYTES:
+            await interaction.followup.send(
+                "本日のメディア送信通信量クォーター上限に達したため、今日はもう添付できないゾ。",
+                ephemeral=True,
+            )
+            return
+
+        discord_file = discord.File(
+            io.BytesIO(data),
+            filename=file.filename,
+            spoiler=file.is_spoiler(),
+        )
+
+        try:
+            should_repost = channel.id in self._latest_launcher_ids
+            await self.send_proxy_message(
+                interaction=interaction,
+                content=message or "",
+                clicked_launcher=None,
+                repost_launcher=should_repost,
+                file=discord_file,
+            )
+            self.bot.storage.add_daily_media_traffic(actual_traffic)
+        except ProxyError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+        except Exception as exc:
+            if is_ratelimited_error(exc):
+                await interaction.followup.send(format_ratelimit_message(exc), ephemeral=True)
+            elif isinstance(exc, discord.HTTPException):
+                logger.warning("メディア代替送信に失敗しました: %s", exc)
                 await interaction.followup.send(
                     "送信ダメみたいですね（失敗）ちょっと待ってから送りなおしてくれよな～頼むよ～",
                     ephemeral=True,

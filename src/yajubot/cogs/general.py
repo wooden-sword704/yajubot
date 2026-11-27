@@ -62,6 +62,12 @@ CHINPOKO_KENJA_RESPONSES: tuple[str, ...] = (
     "俺、後悔してるのに、もう、手遅れだなんて…こんなの辛いよぉ\n（オナアキはあと約 {minutes} 分賢者タイムです。は～つっかえ！）",
     "俺はこんなに汚い尻をしているんだぞ！（脅迫）\n（オナアキはあと約 {minutes} 分賢者タイムです。は～つっかえ！）",
 )
+IKISUGI_TEXT = "ｾﾞｪﾊｧ…ｾﾞｪﾊｧ(ﾎｫﾝ!)…ｱｱｯ!ﾊｧｯ…ﾊｯ　ｲｷｽｷﾞｨ!(ﾎｫﾝ!)ｲｸｩｲｸｲｸｩｨｸ…ｱｯﾊｯ、\n## ﾝｱｯｰ!!\nｱｧｯｱｯ…ｱｯ…ﾊﾝ、ｳｯ!!…ｯｱ…ｯｱｧﾝ…ｯｱｧ…ｱｧ…ｯｱ…"
+IKISUGI_KENJA_RESPONSES: tuple[str, ...] = (
+    "ｸｩｰﾝ...\n（あと約 {minutes} 分賢者タイムです。は～つっかえ！）",
+    "やめたくなりますよなんか部っ活ぅ～\n（あと約 {minutes} 分賢者タイムです。さっさと休めおしゃべりうんち）",
+    "ぬわあああああん疲れたもおおおおおん\n（あと約 {minutes} 分賢者タイムです。は～つっかえ！）",
+)
 
 
 class GeneralCog(commands.Cog):
@@ -70,6 +76,7 @@ class GeneralCog(commands.Cog):
     def __init__(self, bot: YajuBot) -> None:
         self.bot = bot
         self._kenja_until: dict[tuple[int, int], float] = {}
+        self._ikisugi_until: dict[tuple[int, int], float] = {}
 
     @app_commands.command(name="ping", description="いつレイテンシ計測を受けてもいいように…（有能参謀）")
     async def ping(self, interaction: discord.Interaction) -> None:
@@ -138,25 +145,46 @@ class GeneralCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="chinpokodance", description="またチンポコダンスを踊るぜ？（初耳）")
-    async def chinpokodance(self, interaction: discord.Interaction) -> None:
+    async def _try_enter_kenja(
+        self,
+        cooldown_map: dict[tuple[int, int], float],
+        interaction: discord.Interaction,
+        kenja_responses: tuple[str, ...],
+    ) -> bool:
+        """賢者タイム中なら警告を返して False、そうでなければ新たな賢者タイムを設定して True を返す。"""
         now = time.monotonic()
         key = (interaction.guild_id or 0, interaction.user.id)
-        until = self._kenja_until.get(key, 0.0)
+        until = cooldown_map.get(key, 0.0)
         if now < until:
             rem_min = max(1, math.ceil((until - now) / 60.0))
-            msg = random.choice(CHINPOKO_KENJA_RESPONSES).format(minutes=rem_min)
+            msg = random.choice(kenja_responses).format(minutes=rem_min)
             await interaction.response.send_message(msg, ephemeral=True)
-            return
+            return False
         kenja_minutes = random.randint(10, 240)
-        self._kenja_until[key] = now + kenja_minutes * 60.0
-        if len(self._kenja_until) > 5000:
-            stale = [k for k, ts in self._kenja_until.items() if ts <= now]
+        cooldown_map[key] = now + kenja_minutes * 60.0
+        if len(cooldown_map) > 5000:
+            stale = [k for k, ts in cooldown_map.items() if ts <= now]
             for k in stale:
-                del self._kenja_until[k]
-            while len(self._kenja_until) > 5000:
-                del self._kenja_until[next(iter(self._kenja_until))]
+                del cooldown_map[k]
+            while len(cooldown_map) > 5000:
+                del cooldown_map[next(iter(cooldown_map))]
+        return True
+
+    @app_commands.command(name="chinpokodance", description="またチンポコダンスを踊るぜ？（初耳）")
+    async def chinpokodance(self, interaction: discord.Interaction) -> None:
+        if not await self._try_enter_kenja(
+            self._kenja_until, interaction, CHINPOKO_KENJA_RESPONSES
+        ):
+            return
         await interaction.response.send_message(CHINPOKO_DANCE_TEXT)
+
+    @app_commands.command(name="ikisugi", description="まくらが　でかすぎる　よかんがする")
+    async def ikisugi(self, interaction: discord.Interaction) -> None:
+        if not await self._try_enter_kenja(
+            self._ikisugi_until, interaction, IKISUGI_KENJA_RESPONSES
+        ):
+            return
+        await interaction.response.send_message(IKISUGI_TEXT)
 
 
 async def setup(bot: YajuBot) -> None:

@@ -26,6 +26,9 @@ class BotConfig:
     token: str = field(repr=False)
     guild_id: int | None = None
     log_level: str = "INFO"
+    aicord_client_id: str | None = None
+    aicord_client_secret: str | None = field(default=None, repr=False)
+    aicord_redirect_uri: str | None = None
 
 
 def _parse_guild_id(raw_value: str | None) -> int | None:
@@ -89,9 +92,15 @@ def load_config(
 
     guild_id = _parse_guild_id(source.get("DISCORD_GUILD_ID"))
     log_level = _parse_log_level(source.get("LOG_LEVEL"))
+    aicord_client_id = source.get("AICORD_CLIENT_ID", "").strip() or None
+    aicord_client_secret = source.get("AICORD_CLIENT_SECRET", "").strip() or None
+    aicord_redirect_uri = source.get("AICORD_REDIRECT_URI", "").strip() or None
 
     return BotConfig(
         token=raw_token,
         guild_id=guild_id,
         log_level=log_level,
+        aicord_client_id=aicord_client_id,
+        aicord_client_secret=aicord_client_secret,
+        aicord_redirect_uri=aicord_redirect_uri,
     )

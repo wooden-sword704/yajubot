@@ -850,6 +850,24 @@ class ShinkeiModeSelectView(discord.ui.View):
         self.stop()
         await interaction.response.edit_message(content=None, embed=lobby.build_embed(), view=lobby)
 
+    @discord.ui.button(
+        label="戻る", emoji="↩️", style=discord.ButtonStyle.secondary
+    )
+    async def back_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if interaction.user.id != self.host_id:
+            await interaction.response.send_message(
+                "コマンドを実行した本人のみ選択できるゾ。", ephemeral=True
+            )
+            return
+        self.stop()
+        view = ShinkeiDifficultySelectView(self.host_id)
+        await interaction.response.edit_message(
+            content="🃏 **神経衰弱**\n難易度を選択してください、なんでもしますから（なんでもするとは言ってない）",
+            view=view,
+        )
+
 
 IKISUGI_GIMMICK_NOTE = (
     "\n\n **イキスギミックを説明して差し上げろ**\n"

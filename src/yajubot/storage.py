@@ -505,11 +505,169 @@ class ProxyStorage:
                 );
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daily_media_traffic (
+                    date_jst TEXT PRIMARY KEY,
+                    total_bytes INTEGER NOT NULL DEFAULT 0
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS aicord_user_tokens (
+                    user_id INTEGER PRIMARY KEY,
+                    encrypted_token BLOB NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS aicord_channel_configs (
+                    guild_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    character_id TEXT NOT NULL,
+                    character_name TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (guild_id, channel_id)
+                );
+                """
+            )
             self._conn.commit()
 
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    # --- 日次メディア通信量 ---
+
+    def get_daily_media_traffic(self, date_jst: str | None = None) -> int:
+        """指定日（JST YYYY-MM-DD、省略時は本日）の累計メディア通信量（バイト）を返す。"""
+        target_date = date_jst or _now_jst_str()[:10]
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT total_bytes FROM daily_media_traffic WHERE date_jst = ?",
+                (target_date,),
+            ).fetchone()
+            return int(row[0]) if row is not None else 0
+
+    def add_daily_media_traffic(
+        self, bytes_count: int, date_jst: str | None = None
+    ) -> int:
+        """指定日（JST YYYY-MM-DD、省略時は本日）の累計メディア通信量を加算し、更新後の値を返す。"""
+        target_date = date_jst or _now_jst_str()[:10]
+        added = max(0, int(bytes_count))
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO daily_media_traffic (date_jst, total_bytes)
+                VALUES (?, ?)
+                ON CONFLICT(date_jst) DO UPDATE SET
+                    total_bytes = daily_media_traffic.total_bytes + excluded.total_bytes
+                """,
+                (target_date, added),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT total_bytes FROM daily_media_traffic WHERE date_jst = ?",
+                (target_date,),
+            ).fetchone()
+            return int(row[0]) if row is not None else added
+
+    # --- AICord ユーザートークン & チャンネル設定 ---
+
+    def set_aicord_user_token(self, user_id: int, access_token: str) -> None:
+        """ユーザーの AICord アクセストークンを暗号化して保存する。"""
+        encrypted = self._cipher.encrypt(access_token)
+        now_str = _now_jst_str()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO aicord_user_tokens (user_id, encrypted_token, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    encrypted_token = excluded.encrypted_token,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, encrypted, now_str),
+            )
+            self._conn.commit()
+
+    def get_aicord_user_token(self, user_id: int) -> str | None:
+        """保存されたユーザーの AICord アクセストークンを復号して返す。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT encrypted_token FROM aicord_user_tokens WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._cipher.decrypt(bytes(row[0]))
+
+    def delete_aicord_user_token(self, user_id: int) -> bool:
+        """ユーザーの AICord アクセストークンを削除する。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM aicord_user_tokens WHERE user_id = ?",
+                (user_id,),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def set_aicord_channel(
+        self, guild_id: int, channel_id: int, character_id: str, character_name: str
+    ) -> None:
+        """指定チャンネルの AICord 対話キャラクターを設定する。"""
+        now_str = _now_jst_str()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO aicord_channel_configs
+                    (guild_id, channel_id, character_id, character_name, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(guild_id, channel_id) DO UPDATE SET
+                    character_id = excluded.character_id,
+                    character_name = excluded.character_name,
+                    updated_at = excluded.updated_at
+                """,
+                (guild_id, channel_id, character_id, character_name, now_str),
+            )
+            self._conn.commit()
+
+    def remove_aicord_channel(self, guild_id: int, channel_id: int) -> bool:
+        """指定チャンネルの AICord 対話設定を削除する。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM aicord_channel_configs WHERE guild_id = ? AND channel_id = ?",
+                (guild_id, channel_id),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def get_aicord_channel(
+        self, guild_id: int, channel_id: int
+    ) -> tuple[str, str] | None:
+        """指定チャンネルに設定された (character_id, character_name) を返す。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT character_id, character_name FROM aicord_channel_configs "
+                "WHERE guild_id = ? AND channel_id = ?",
+                (guild_id, channel_id),
+            ).fetchone()
+            if row is None:
+                return None
+            return str(row[0]), str(row[1])
+
+    def list_aicord_channels(self, guild_id: int) -> list[tuple[int, str, str]]:
+        """ギルド内の設定済みチャンネル一覧 (channel_id, character_id, character_name) を返す。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT channel_id, character_id, character_name FROM aicord_channel_configs "
+                "WHERE guild_id = ? ORDER BY channel_id ASC",
+                (guild_id,),
+            ).fetchall()
+            return [(int(r[0]), str(r[1]), str(r[2])) for r in rows]
 
     # --- ギルド設定 ---
 

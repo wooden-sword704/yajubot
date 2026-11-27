@@ -104,8 +104,8 @@ OMIKUJI_IMAGES_DIR = Path(__file__).resolve().parent.parent / "omikuji_data" / "
 OMIKUJI_TADOCOIN_RULES: tuple[tuple[str, int], ...] = (
     ("お　お　あ　た　り", 300000),
     ("ビリー兄貴級", 12000),
-    ("野獣先輩級", 8000),
-    ("MUR大先輩級", 5000),
+    ("野獣先輩級", 8100),
+    ("MUR大先輩級", 3643),
     ("拓也さん級", 3000),
     ("お　お　は　ず　れ", -5000),
 )
