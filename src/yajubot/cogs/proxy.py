@@ -676,7 +676,7 @@ class ConfirmDeleteView(discord.ui.View):
             )
         except (discord.Forbidden, discord.HTTPException):
             await interaction.edit_original_response(
-                content="メッセージの削除ができなかっ...たぁ!（Bot の権限を確認してください）。",
+                content="メッセージの削除ができなかっ...たぁ!（Bot の権限を確認してくれよな～頼むよ～）。",
                 view=None,
             )
         else:

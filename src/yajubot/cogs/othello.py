@@ -110,7 +110,7 @@ class OthelloBoardView(discord.ui.View):
                 return self._board_message
             self.game.is_aborted = True
             self.game.aborted_by = user_id
-            self.last_note = f"<@{user_id}> が別のゲームを始めるため投了しました。賭け金は返金されません。"
+            self.last_note = f"<@{user_id}> が別のゲームを始めるため投了したゾ。賭け金は返金されないゾ。"
             self._rebuild_controls()
             embed, file = self.build_embed_and_file()
             self.stop()
@@ -157,7 +157,7 @@ class OthelloBoardView(discord.ui.View):
         if self.game.is_aborted:
             self.bot.storage.add_tadocoin(self.guild_id, self.game.black_user_id, self.bet)
             self.bot.storage.add_tadocoin(self.guild_id, self.game.white_user_id, self.bet)
-            return "タイムアウトのため双方に賭け金を返金しました。"
+            return "タイムアウトのため双方に賭け金を返金したゾ。"
 
         black_cnt, white_cnt = self.game.count_discs()
         if black_cnt > white_cnt:
@@ -171,7 +171,7 @@ class OthelloBoardView(discord.ui.View):
 
         self.bot.storage.add_tadocoin(self.guild_id, self.game.black_user_id, self.bet)
         self.bot.storage.add_tadocoin(self.guild_id, self.game.white_user_id, self.bet)
-        return f"引き分けのため双方に **{self.bet:,}** タドコインを返金しました。"
+        return f"引き分けのため双方に **{self.bet:,}** タドコインを返金したゾ。"
 
     def _rebuild_controls(self) -> None:
         self.clear_items()
@@ -280,7 +280,7 @@ class OthelloBoardView(discord.ui.View):
         error: Exception,
         item: discord.ui.Item,
     ) -> None:
-        logger.exception("OthelloBoardView でエラーが発生しました: %s", error)
+        logger.exception("OthelloBoardView でエラーが発生したゾ: %s", error)
         msg = "オセロの処理中にエラーが発生したゾ。"
         try:
             if interaction.response.is_done():
@@ -342,7 +342,7 @@ class OthelloBoardView(discord.ui.View):
                 return
             self.game.is_aborted = True
             self.game.aborted_by = interaction.user.id
-            self.last_note = f"<@{interaction.user.id}> が投了しました。"
+            self.last_note = f"<@{interaction.user.id}> が投了したゾ。"
             self._rebuild_controls()
             self.stop()
             embed, file = self.build_embed_and_file()
@@ -374,7 +374,7 @@ class OthelloLobbyView(discord.ui.View):
         bet_text = f"**{self.bet:,}** タドコイン" if self.bet > 0 else "無料（賭けなし）"
         embed = discord.Embed(
             title="オセロ対戦相手募集中",
-            description="「参加する」ボタンで2人目が揃ったら、ホストが「対局開始」を押してください。",
+            description="「参加する」ボタンで2人目が揃ったら、ホストが「対局開始」を押してくれよな～頼むよ～",
             color=discord.Color.blurple(),
         )
         embed.add_field(name="賭け金", value=bet_text, inline=True)
@@ -399,7 +399,7 @@ class OthelloLobbyView(discord.ui.View):
                 self.stop()
                 embed = discord.Embed(
                     title="オセロ募集終了",
-                    description="ホストが別のゲームを始めるため募集を終了しました。参加費・賭け金は返金されません。",
+                    description="ホストが別のゲームを始めるため募集を終了したゾ。参加費・賭け金は返金されないゾ。",
                     color=discord.Color.dark_grey(),
                 )
                 if self._lobby_message is not None:
@@ -491,7 +491,7 @@ class OthelloLobbyView(discord.ui.View):
                 self.stop()
                 embed = discord.Embed(
                     title="オセロ募集解散",
-                    description="ホストが解散しました。",
+                    description="ホストが解散したゾ。",
                     color=discord.Color.dark_grey(),
                 )
                 await interaction.response.edit_message(embed=embed, view=None)
@@ -611,8 +611,8 @@ class OthelloModeSelectView(discord.ui.View):
         embed = discord.Embed(
             title="オセロ（AI対戦）",
             description=(
-                "難易度を選択してください。\n"
-                "※ AI対戦ではタドコインの消費・付与はありません。"
+                "難易度を選択してくれよな～頼むよ～\n"
+                "※ AI対戦ではタドコインの消費・付与はありないゾ。"
             ),
             color=discord.Color.blurple(),
         )
@@ -691,7 +691,7 @@ class OthelloAiDifficultyView(discord.ui.View):
         )
         embed = discord.Embed(
             title="オセロ",
-            description="対戦モードを選択してください。",
+            description="対戦モードを選択してくれよな～頼むよ～",
             color=discord.Color.blurple(),
         )
         await interaction.response.edit_message(embed=embed, view=mode_view)
@@ -742,7 +742,7 @@ class OthelloCog(commands.Cog):
         )
         embed = discord.Embed(
             title="オセロ",
-            description=f"対戦モードを選択してください{bet_note}。",
+            description=f"対戦モードを選択してくれよな～頼むよ～{bet_note}。",
             color=discord.Color.blurple(),
         )
         await interaction.response.send_message(embed=embed, view=mode_view)

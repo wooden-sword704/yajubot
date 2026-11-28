@@ -631,7 +631,7 @@ class RouletteModeSelectView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         await interaction.response.edit_message(
-            content="1回の続行で脱落させる数（最大5個）を選択してください。オッスお願いしまーす",
+            content="1回の続行で脱落させる数（最大5個）を選択してくれよな～頼むよ～オッスお願いしまーす",
             view=RouletteEliminationCountView(self.cog, self.roulette_id),
         )
 
@@ -681,7 +681,7 @@ class RouletteEliminationCountView(discord.ui.View):
         if isinstance(channel, (discord.TextChannel, discord.Thread)):
             await channel.send(embed=view.build_status_embed(), view=view)
         await interaction.response.edit_message(
-            content=f"脱落選抜（{step_count}個ずつ）を開始しました！チャンネルの「続行」ボタンで進めてください。",
+            content=f"脱落選抜（{step_count}個ずつ）を開始しました！チャンネルの「続行」ボタンで進めてくれよな～頼むよ～",
             view=None,
         )
 
@@ -920,11 +920,11 @@ class RouletteCog(commands.Cog):
         view = RouletteModeSelectView(self, roulette_id)
         if interaction.response.is_done():
             await interaction.followup.send(
-                "選抜方式を選択してください。", view=view, ephemeral=True
+                "選抜方式を選択してくれよな～頼むよ～", view=view, ephemeral=True
             )
         else:
             await interaction.response.send_message(
-                "選抜方式を選択してください。", view=view, ephemeral=True
+                "選抜方式を選択してくれよな～頼むよ～", view=view, ephemeral=True
             )
 
     @tasks.loop(seconds=15)
@@ -948,7 +948,7 @@ class RouletteCog(commands.Cog):
                     )
                     try:
                         await channel.send(
-                            content=f"<@{roulette.owner_id}> ルーレット #{roulette.id} の募集時間が終了しました！開始ボタンを押してルーレットを回してください。",
+                            content=f"<@{roulette.owner_id}> ルーレット #{roulette.id} の募集時間が終了しました！開始ボタンを押してルーレットを回してくれよな～頼むよ～",
                             view=view,
                         )
                     except (discord.Forbidden, discord.HTTPException):
@@ -1055,7 +1055,7 @@ class RouletteCog(commands.Cog):
             )
             return
         await interaction.response.send_message(
-            "実行したい操作を選択してください。",
+            "実行したい操作を選択してくれよな～頼むよ～",
             view=RouletteEntryView(self, interaction.guild.id),
             ephemeral=True,
         )
@@ -1085,7 +1085,7 @@ class RouletteCog(commands.Cog):
             )
             return
         await interaction.response.send_message(
-            "管理するルーレットを選択してください。",
+            "管理するルーレットを選択してくれよな～頼むよ～",
             view=RouletteAdminSelectView(self, roulettes),
             ephemeral=True,
         )

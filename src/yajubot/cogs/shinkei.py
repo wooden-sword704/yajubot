@@ -246,7 +246,7 @@ class ShinkeiGame:
         self.turn_index = (self.turn_index + 1) % len(self.players)
 
     def forfeit_player(self, user_id: int) -> str:
-        """プレイヤーを途中終了/離脱させる。戻り値: 'not_in_game' | 'aborted' | 'forfeited'"""
+        """プレイヤーを途中閉廷/離脱させる。戻り値: 'not_in_game' | 'aborted' | 'forfeited'"""
         if user_id not in self.players:
             return "not_in_game"
         if len(self.players) <= 1:
@@ -415,7 +415,7 @@ class ShinkeiBoardView(discord.ui.View):
 
         if self.game.difficulty.rows < 5:
             quit_btn = discord.ui.Button(
-                label="終了",
+                label="閉廷",
                 emoji="🏳️",
                 style=discord.ButtonStyle.danger,
                 custom_id="shinkei:quit",
@@ -470,9 +470,9 @@ class ShinkeiBoardView(discord.ui.View):
     ) -> discord.Embed:
         diff = self.game.difficulty
         if self.game.is_aborted:
-            prefix = f"{status_note}\n" if status_note else "ゲームが途中終了されました。"
+            prefix = f"{status_note}\n" if status_note else "ゲームが途中閉廷されました。"
             return discord.Embed(
-                title=f"神経衰弱 終了（{diff.label}）",
+                title=f"神経衰弱 閉廷（{diff.label}）",
                 description=f"{prefix}（獲得ペア: **{self.game.matched_pairs} / {diff.required_pairs}** / 手数: **{self.game.moves}手**）",
                 color=discord.Color.dark_grey(),
             )
@@ -549,7 +549,7 @@ class ShinkeiBoardView(discord.ui.View):
             )
             return
         msg = (
-            "このゲームを途中終了やっちゃうよ！？やっちゃうよ！？"
+            "このゲームを途中閉廷やっちゃうよ！？やっちゃうよ！？"
             if len(self.game.players) <= 1
             else "ゲームから途中離脱やっちゃうよ！？やっちゃうよ！？"
         )
@@ -578,7 +578,7 @@ class ShinkeiBoardView(discord.ui.View):
                 self.stop()
                 try:
                     await interaction.response.edit_message(
-                        embed=self.build_embed("⏰ **制限時間切れによりゲームが終了しました。**"),
+                        embed=self.build_embed("**時間制限でゲームが終わっちゃっ...たぁ！**\n「みんな、時間制限なんかやめよう！馬鹿らしいよ！」\n「おい！みんな見てみろよ！ラブアンドピース！（パッチギ）」\n-# 「アーイク、アァ、アァ、アァ…」\n## 「終わり！閉廷！以上！皆解散！」"),
                         view=self,
                     )
                 except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
@@ -731,7 +731,7 @@ class ShinkeiBoardView(discord.ui.View):
 
 
 class ShinkeiQuitConfirmView(discord.ui.View):
-    """途中終了・離脱の確認 View。"""
+    """途中閉廷・離脱の確認 View。"""
 
     def __init__(
         self, board_view: ShinkeiBoardView, board_message: discord.Message | None
@@ -740,7 +740,7 @@ class ShinkeiQuitConfirmView(discord.ui.View):
         self.board_view = board_view
         self.board_message = board_message
 
-    @discord.ui.button(label="終了/離脱", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="閉廷/離脱", style=discord.ButtonStyle.danger)
     async def confirm_btn(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -748,7 +748,7 @@ class ShinkeiQuitConfirmView(discord.ui.View):
         async with game.lock:
             if game.is_finished or game.is_aborted:
                 await interaction.response.edit_message(
-                    content="ゲームはすでに終了してるゾ", view=None
+                    content="ゲームはすでに閉廷してるゾ", view=None
                 )
                 return
             outcome = game.forfeit_player(interaction.user.id)
@@ -769,7 +769,7 @@ class ShinkeiQuitConfirmView(discord.ui.View):
         if outcome == "aborted":
             self.board_view.stop()
             await interaction.response.edit_message(
-                content="ゲームを途中終了したゾ", view=None
+                content="ゲームを途中閉廷したゾ", view=None
             )
         else:
             if hasattr(interaction.client, "release_game"):
@@ -783,7 +783,7 @@ MAX_MULTIPLAYER_PLAYERS = 4
 
 
 class ShinkeiLobbyLeaveConfirmView(discord.ui.View):
-    """マルチプレイ待機ロビーからの退出・途中終了確認 View。"""
+    """マルチプレイ待機ロビーからの退出・途中閉廷確認 View。"""
 
     def __init__(
         self, lobby_view: ShinkeiLobbyView, lobby_message: discord.Message | None
@@ -799,7 +799,7 @@ class ShinkeiLobbyLeaveConfirmView(discord.ui.View):
         lv = self.lobby_view
         if lv.is_closed:
             await interaction.response.edit_message(
-                content="このロビーはすでに終了・開始されているゾ。", view=None
+                content="このロビーはすでに閉廷・開始されているゾ。", view=None
             )
             return
 
@@ -815,8 +815,8 @@ class ShinkeiLobbyLeaveConfirmView(discord.ui.View):
             if hasattr(interaction.client, "release_games"):
                 interaction.client.release_games(lv.players)
             closed_embed = discord.Embed(
-                title=f"🃏 神経衰弱 募集終了（{lv.difficulty.label}）",
-                description="ホストによりロビーが途中終了されました。",
+                title=f"🃏 神経衰弱 募集閉廷（{lv.difficulty.label}）",
+                description="ホストによりロビーが途中閉廷されたゾ",
                 color=discord.Color.dark_grey(),
             )
             if self.lobby_message is not None:
@@ -825,7 +825,7 @@ class ShinkeiLobbyLeaveConfirmView(discord.ui.View):
                 except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
                     pass
             await interaction.response.edit_message(
-                content="ロビーを途中終了したゾ。", view=None
+                content="ロビーを途中閉廷したゾ。", view=None
             )
             return
 
@@ -903,8 +903,8 @@ class ShinkeiLobbyView(discord.ui.View):
                 try:
                     await self._lobby_message.edit(
                         embed=discord.Embed(
-                            title=f"🃏 神経衰弱 募集終了（{self.difficulty.label}）",
-                            description="ホストが別のゲームを始めるためロビーを終了しました。",
+                            title=f"🃏 神経衰弱 募集閉廷（{self.difficulty.label}）",
+                            description="ホストが別のゲームを始めるためロビーを閉廷したゾ",
                             color=discord.Color.dark_grey(),
                         ),
                         view=None,
@@ -988,14 +988,14 @@ class ShinkeiLobbyView(discord.ui.View):
         self.stop()
         await interaction.response.edit_message(content=None, embed=board.build_embed(), view=board)
 
-    @discord.ui.button(label="退出 / 終了", emoji="🚪", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="退出 / 閉廷", emoji="🚪", style=discord.ButtonStyle.danger)
     async def leave_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         self._lobby_message = interaction.message
         if self.is_closed:
             await interaction.response.send_message(
-                "このロビーはすでに終了・開始されているゾ。", ephemeral=True
+                "このロビーはすでに閉廷・開始されているゾ。", ephemeral=True
             )
             return
         if interaction.user.id not in self.players:
@@ -1004,9 +1004,9 @@ class ShinkeiLobbyView(discord.ui.View):
             )
             return
         msg = (
-            "ホストが抜けるとロビーが途中終了になるゾ。本当に終了する？"
+            "ホストが抜けるとロビーが途中閉廷になるゾ。"
             if interaction.user.id == self.host_id
-            else "ロビーから退出するゾ。よろしいですか？"
+            else "ロビーから退出するゾ？"
         )
         confirm_view = ShinkeiLobbyLeaveConfirmView(self, interaction.message)
         await interaction.response.send_message(msg, view=confirm_view, ephemeral=True)
@@ -1224,14 +1224,14 @@ class ShinkeiInterruptConfirmView(discord.ui.View):
     ) -> None:
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
-                "コマンドを実行した本人のみ操作できます。", ephemeral=True
+                "コマンドを実行した本人のみ操作できるゾ", ephemeral=True
             )
             return
 
         interrupted, target_message = await self.bot.interrupt_game(self.user_id)
         if not interrupted:
             await interaction.response.edit_message(
-                content="現在のゲームはすでに終了しているか、中断できません。",
+                content="現在のゲームはすでに閉廷しているか、中断できないゾ",
                 view=None,
             )
             return
@@ -1239,7 +1239,7 @@ class ShinkeiInterruptConfirmView(discord.ui.View):
         existing = self.bot.try_acquire_game(self.user_id, "神経衰弱")
         if existing is not None:
             await interaction.response.edit_message(
-                content=f"現在「{existing}」をプレイ中/募集中のため、開始できません。",
+                content=f"現在「{existing}」をプレイ中/募集中のため、開始できないゾ",
                 view=None,
             )
             return
@@ -1251,8 +1251,8 @@ class ShinkeiInterruptConfirmView(discord.ui.View):
             self.user_id, unlocked_super_ikisugi=unlocked, bot=self.bot
         )
         content = (
-            "現在のゲームから退出しました。賭け金・チップは返金されません。\n"
-            "🃏 **神経衰弱**\n難易度を選択してください。"
+            "現在のゲームから逃げ出したゾ。賭け金・チップは返金されないゾ\n"
+            "🃏 **神経衰弱**\n難易度を選択してホ"
         )
         await interaction.response.defer()
         channel = interaction.channel

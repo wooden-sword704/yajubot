@@ -182,8 +182,8 @@ class PokerTableView(discord.ui.View):
                 return self._board_message
             self.is_closed = True
             self.table.last_action_text = (
-                f"<@{user_id}> が別のゲームを始めるためテーブルを中断しました。"
-                "残チップ・賭け金は返金されません。"
+                f"<@{user_id}> が別のゲームを始めるためテーブルを中断したゾ"
+                "残チップ・賭け金は返金されないゾ。"
             )
             self._build_controls()
             self.stop()
@@ -476,7 +476,7 @@ class PokerTableView(discord.ui.View):
         if self.table.last_action_text:
             embed.set_footer(text=self.table.last_action_text)
         if self.is_closed:
-            embed.description = "全プレイヤーの精算が完了し、テーブルを終了しました。"
+            embed.description = "全プレイヤーの精算が完了し、テーブルを終了したゾ。"
 
         return embed
 
@@ -486,7 +486,7 @@ class PokerTableView(discord.ui.View):
         error: Exception,
         item: discord.ui.Item,
     ) -> None:
-        logger.exception("PokerTableView でエラーが発生しました: %s", error)
+        logger.exception("PokerTableView でエラーが発生したゾ: %s", error)
         msg = "ポーカーの処理中にエラーが発生したゾ。もう一度試してくれよな〜。"
         try:
             if interaction.response.is_done():
@@ -533,7 +533,7 @@ class PokerTableView(discord.ui.View):
                     embed=self.build_embed(), view=self
                 )
             except (discord.NotFound, discord.HTTPException) as exc:
-                logger.warning("ポーカー盤面の更新に失敗しました: %s", exc)
+                logger.warning("ポーカー盤面の更新に失敗したゾ: %s", exc)
 
     async def _on_check_or_call(self, interaction: discord.Interaction) -> None:
         cp = self.table.current_player
@@ -626,7 +626,7 @@ class PokerTableView(discord.ui.View):
                     embed=self.build_embed(), view=self
                 )
             except (discord.NotFound, discord.HTTPException) as exc:
-                logger.warning("ポーカー盤面の更新に失敗しました: %s", exc)
+                logger.warning("ポーカー盤面の更新に失敗したゾ: %s", exc)
 
     async def _on_cashout_leave(self, interaction: discord.Interaction) -> None:
         async with self.lock:
@@ -648,7 +648,7 @@ class PokerTableView(discord.ui.View):
             self.table.players = [
                 p for p in self.table.players if p.user_id != interaction.user.id
             ]
-            self.table.last_action_text = f"<@{interaction.user.id}> が精算して離脱しました"
+            self.table.last_action_text = f"<@{interaction.user.id}> が精算して離脱したゾ"
 
             survivors = [p for p in self.table.players if p.chips > 0]
             if len(survivors) < MIN_POKER_PLAYERS:
@@ -720,8 +720,8 @@ class PokerLobbyView(discord.ui.View):
         embed = discord.Embed(
             title="🃏 ポーカー（テキサスホールデム）参加者募集中！",
             description=(
-                "「参加する」ボタンを押して席に着こう！\n"
-                "ホストが「ゲーム開始」を押すとスタートします（2〜6人）。"
+                "「参加する」ボタンを押して席に着こう（提案）\n"
+                "ホストが「ゲーム開始」を押すとスタートするゾ（2〜6人）。"
             ),
             color=discord.Color.blurple(),
         )
@@ -752,7 +752,7 @@ class PokerLobbyView(discord.ui.View):
                 self.stop()
                 embed = discord.Embed(
                     title="ポーカー募集終了",
-                    description="ホストが別のゲームを始めるため募集を終了しました。参加費・チップは返金されません。",
+                    description="ホストが別のゲームを始めるため募集を終了したゾ。参加費・チップは返金されません。",
                     color=discord.Color.dark_grey(),
                 )
                 if self._lobby_message is not None:
@@ -845,7 +845,7 @@ class PokerLobbyView(discord.ui.View):
                 self.stop()
                 embed = discord.Embed(
                     title="🃏 ポーカー募集解散",
-                    description="ホストが解散したため、参加費を全員に返金しました。",
+                    description="ホストが解散したため、参加費を全員に返金したゾ。",
                     color=discord.Color.dark_grey(),
                 )
                 await interaction.response.edit_message(embed=embed, view=None)
@@ -1059,7 +1059,7 @@ class PokerCog(commands.Cog):
         embed = discord.Embed(
             title="ポーカー（テキサスホールデム）",
             description=(
-                "対戦モードを選択してください。\n"
+                "対戦モードを選択してくれよな～頼むよ～\n"
                 f"・対人戦の参加費: **{buy_in:,}** タドコイン（SB: {small_blind:,} / BB: {small_blind * 2:,}）\n"
                 "・1人練習: 無料（タドコインの消費・付与はありません）"
             ),
