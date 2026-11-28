@@ -31,7 +31,9 @@ BINJOU_OTHER_TEXT_PROBABILITY: float = 0.25  # 「そうだよ/そうですよ�
 SPECIAL_BINJOU_BONUS_PERCENT: float = 10.0  # 特別便乗時のベース確率への加算 (+10%)
 BINJOU_RATELIMIT_SILENCE_SECONDS: float = 10.0  # レート制限時の最小サイレンス秒数
 
-MITENAI_PATTERN = re.compile(r"[見観み]て(?:い?ない|い?ません)")
+MITENAI_PATTERN = re.compile(
+    r"[見観み]て(?:い?(?:ない|なかっ?た|ません|ねぇ|ねー|ねえ))"
+)
 MITAI_PATTERN = re.compile(r"[見観み]たい")
 
 BINJOU_MESSAGES: tuple[str, ...] = (
@@ -244,13 +246,7 @@ class BinjouCog(commands.Cog):
             return
 
         special_text = _detect_special_binjou_text(message.content or "")
-        if special_text is not None:
-            effective_prob = min(
-                100.0, settings.binjou_probability + SPECIAL_BINJOU_BONUS_PERCENT
-            )
-            if random.random() * 100.0 >= effective_prob:
-                return
-        elif random.random() * 100.0 >= settings.binjou_probability:
+        if special_text is None and random.random() * 100.0 >= settings.binjou_probability:
             return
 
         bot_user = self.bot.user

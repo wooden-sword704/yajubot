@@ -24,7 +24,7 @@ NPC_BOT_ID = -1
 
 
 def _format_player_name(user_id: int) -> str:
-    return "🤖 **練習Bot**" if user_id == NPC_BOT_ID else f"<@{user_id}>"
+    return "**練習Bot**" if user_id == NPC_BOT_ID else f"<@{user_id}>"
 
 PHASE_LABELS: dict[str, str] = {
     "WAITING": "待機中",
@@ -163,7 +163,7 @@ class PokerTableView(discord.ui.View):
                 else:
                     self.table.apply_action(NPC_BOT_ID, "call")
             self.table.last_action_text = self.table.last_action_text.replace(
-                f"<@{NPC_BOT_ID}>", "🤖 練習Bot"
+                f"<@{NPC_BOT_ID}>", "練習Bot"
             )
 
     def stop(self) -> None:
@@ -266,7 +266,6 @@ class PokerTableView(discord.ui.View):
         if self.table.phase == "SHOWDOWN":
             next_btn = discord.ui.Button(
                 label="次のハンドへ",
-                emoji="▶",
                 style=discord.ButtonStyle.success,
                 row=0,
             )
@@ -276,7 +275,6 @@ class PokerTableView(discord.ui.View):
             if not self.is_practice:
                 cashout_btn = discord.ui.Button(
                     label="精算して抜ける",
-                    emoji="💰",
                     style=discord.ButtonStyle.secondary,
                     row=0,
                 )
@@ -285,7 +283,6 @@ class PokerTableView(discord.ui.View):
 
             close_btn = discord.ui.Button(
                 label="練習を終了する" if self.is_practice else "テーブル解散（ホスト）",
-                emoji="🛑",
                 style=discord.ButtonStyle.danger,
                 row=0,
             )
@@ -294,7 +291,6 @@ class PokerTableView(discord.ui.View):
 
             help_btn = discord.ui.Button(
                 label="ルール・役一覧",
-                emoji="📖",
                 style=discord.ButtonStyle.secondary,
                 row=1,
             )
@@ -324,7 +320,6 @@ class PokerTableView(discord.ui.View):
                 raise_label = "ベット" if self.table.current_bet == 0 else "レイズ"
                 raise_btn = discord.ui.Button(
                     label=raise_label,
-                    emoji="📈",
                     style=discord.ButtonStyle.success,
                     row=0,
                 )
@@ -334,7 +329,6 @@ class PokerTableView(discord.ui.View):
             if legal.can_all_in:
                 all_in_btn = discord.ui.Button(
                     label=f"オールイン ({cp.chips:,})" if cp else "オールイン",
-                    emoji="🔥",
                     style=discord.ButtonStyle.danger,
                     row=0,
                 )
@@ -343,7 +337,6 @@ class PokerTableView(discord.ui.View):
 
             fold_btn = discord.ui.Button(
                 label="フォールド",
-                emoji="🏳️",
                 style=discord.ButtonStyle.secondary,
                 row=0,
             )
@@ -353,7 +346,6 @@ class PokerTableView(discord.ui.View):
         # Row 1: 盤面を変更しない補助ボタン（誰がいつ押しても安全）
         hand_btn = discord.ui.Button(
             label="手札を見る",
-            emoji="🃏",
             style=discord.ButtonStyle.primary,
             row=1,
         )
@@ -362,7 +354,6 @@ class PokerTableView(discord.ui.View):
 
         help_btn = discord.ui.Button(
             label="ルール・役一覧",
-            emoji="📖",
             style=discord.ButtonStyle.secondary,
             row=1,
         )
@@ -374,13 +365,13 @@ class PokerTableView(discord.ui.View):
         unit = "タドコイン" if self.is_real_tadocoin else "練習チップ"
 
         if self.is_closed:
-            title = f"🃏 ポーカー終了（ハンド #{self.table.hand_number}）"
+            title = f"ポーカー終了（ハンド #{self.table.hand_number}）"
             color = discord.Color.dark_grey()
         elif self.table.phase == "SHOWDOWN":
-            title = f"🏆 ショーダウン（ハンド #{self.table.hand_number}）"
+            title = f"ショーダウン（ハンド #{self.table.hand_number}）"
             color = discord.Color.gold()
         else:
-            title = f"🃏 ポーカー（ハンド #{self.table.hand_number} / {phase_label}）"
+            title = f"ポーカー（ハンド #{self.table.hand_number} / {phase_label}）"
             color = discord.Color.green()
 
         embed = discord.Embed(title=title, color=color)
@@ -410,15 +401,15 @@ class PokerTableView(discord.ui.View):
 
         player_lines: list[str] = []
         for idx, p in enumerate(self.table.players):
-            dealer_mark = "🔘" if idx == self.table.dealer_idx else ""
+            dealer_mark = "[D] " if idx == self.table.dealer_idx else ""
             if p.folded:
-                state = "🏳️ フォールド"
+                state = "フォールド"
             elif p.all_in:
-                state = "🔥 オールイン"
+                state = "オールイン"
             elif cp is not None and p.user_id == cp.user_id:
-                state = "👈 **思考中**"
+                state = "**手番**"
             elif p.chips == 0 and self.table.phase == "SHOWDOWN":
-                state = "💀 チップ0"
+                state = "チップ0"
             else:
                 state = "待機"
 
@@ -447,7 +438,7 @@ class PokerTableView(discord.ui.View):
 
         if self.table.phase == "SHOWDOWN" and self.table.last_result is not None:
             payout_lines = [
-                f"🏆 {_format_player_name(uid)}: **+{amt:,}** {unit}"
+                f"{_format_player_name(uid)}: **+{amt:,}** {unit}"
                 for uid, amt in self.table.last_result.total_payouts.items()
             ]
             if payout_lines:
