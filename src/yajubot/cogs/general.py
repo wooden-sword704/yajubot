@@ -75,8 +75,9 @@ class GeneralCog(commands.Cog):
 
     def __init__(self, bot: YajuBot) -> None:
         self.bot = bot
-        self._kenja_until: dict[tuple[int, int], float] = {}
-        self._ikisugi_until: dict[tuple[int, int], float] = {}
+        # (until_monotonic, last_reward_tadocoin)
+        self._kenja_until: dict[tuple[int, int], tuple[float, int]] = {}
+        self._ikisugi_until: dict[tuple[int, int], tuple[float, int]] = {}
 
     @app_commands.command(name="ping", description="いつレイテンシ計測を受けてもいいように…（有能参謀）")
     async def ping(self, interaction: discord.Interaction) -> None:
@@ -147,44 +148,66 @@ class GeneralCog(commands.Cog):
 
     async def _try_enter_kenja(
         self,
-        cooldown_map: dict[tuple[int, int], float],
+        cooldown_map: dict[tuple[int, int], tuple[float, int]],
         interaction: discord.Interaction,
         kenja_responses: tuple[str, ...],
-    ) -> bool:
-        """賢者タイム中なら警告を返して False、そうでなければ新たな賢者タイムを設定して True を返す。"""
+        reward_reason: str,
+    ) -> int | None:
+        """賢者タイム中なら警告と前回獲得量を返して None、そうでなければ新たな賢者タイムを設定し獲得タドコイン量を返す。"""
         now = time.monotonic()
         key = (interaction.guild_id or 0, interaction.user.id)
-        until = cooldown_map.get(key, 0.0)
-        if now < until:
+        entry = cooldown_map.get(key)
+        if entry is not None and now < entry[0]:
+            until, last_reward = entry
             rem_min = max(1, math.ceil((until - now) / 60.0))
             msg = random.choice(kenja_responses).format(minutes=rem_min)
+            if last_reward > 0:
+                msg += f"\n（前回の獲得: **{last_reward:,}** タドコイン — {reward_reason}）"
             await interaction.response.send_message(msg, ephemeral=True)
-            return False
+            return None
+
         kenja_minutes = random.randint(10, 240)
-        cooldown_map[key] = now + kenja_minutes * 60.0
+        # CT が短いほど少なく(10分→100)、長いほど多く(240分→500)
+        reward = round(100 + (kenja_minutes - 10) * 400 / (240 - 10))
+        if interaction.guild_id is not None:
+            self.bot.storage.add_tadocoin(interaction.guild_id, interaction.user.id, reward)
+        else:
+            reward = 0
+
+        cooldown_map[key] = (now + kenja_minutes * 60.0, reward)
         if len(cooldown_map) > 5000:
-            stale = [k for k, ts in cooldown_map.items() if ts <= now]
+            stale = [k for k, (ts, _) in cooldown_map.items() if ts <= now]
             for k in stale:
                 del cooldown_map[k]
             while len(cooldown_map) > 5000:
                 del cooldown_map[next(iter(cooldown_map))]
-        return True
+        return reward
 
     @app_commands.command(name="chinpokodance", description="またチンポコダンスを踊るぜ？（初耳）")
     async def chinpokodance(self, interaction: discord.Interaction) -> None:
-        if not await self._try_enter_kenja(
-            self._kenja_until, interaction, CHINPOKO_KENJA_RESPONSES
-        ):
+        reason = "オナアキのチンポコダンスの衝撃で財布から飛んで行った"
+        reward = await self._try_enter_kenja(
+            self._kenja_until, interaction, CHINPOKO_KENJA_RESPONSES, reason
+        )
+        if reward is None:
             return
-        await interaction.response.send_message(CHINPOKO_DANCE_TEXT)
+        text = CHINPOKO_DANCE_TEXT
+        if reward > 0:
+            text += f"\n（{reason}ため **+{reward:,}** タドコイン入手！）"
+        await interaction.response.send_message(text)
 
     @app_commands.command(name="ikisugi", description="まくらが　でかすぎる　よかんがする")
     async def ikisugi(self, interaction: discord.Interaction) -> None:
-        if not await self._try_enter_kenja(
-            self._ikisugi_until, interaction, IKISUGI_KENJA_RESPONSES
-        ):
+        reason = "野獣先輩が屋上に忘れた財布から取ってきた"
+        reward = await self._try_enter_kenja(
+            self._ikisugi_until, interaction, IKISUGI_KENJA_RESPONSES, reason
+        )
+        if reward is None:
             return
-        await interaction.response.send_message(IKISUGI_TEXT)
+        text = IKISUGI_TEXT
+        if reward > 0:
+            text += f"\n（{reason}ため **+{reward:,}** タドコイン入手！）"
+        await interaction.response.send_message(text)
 
 
 async def setup(bot: YajuBot) -> None:

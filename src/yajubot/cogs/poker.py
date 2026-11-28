@@ -168,6 +168,7 @@ class PokerTableView(discord.ui.View):
 
     def stop(self) -> None:
         self._cancel_turn_timer()
+        self.bot.release_games([p.user_id for p in self.table.players])
         super().stop()
 
     def _cancel_turn_timer(self) -> None:
@@ -235,6 +236,7 @@ class PokerTableView(discord.ui.View):
                     pass
 
     def _refund_player(self, user_id: int, chips: int) -> None:
+        self.bot.release_game(user_id)
         if user_id in self._cashed_out_ids:
             return
         self._cashed_out_ids.add(user_id)
@@ -731,11 +733,19 @@ class PokerLobbyView(discord.ui.View):
                     f"満席だゾ（最大 {MAX_POKER_PLAYERS} 人まで）。", ephemeral=True
                 )
                 return
+            existing = self.bot.try_acquire_game(interaction.user.id, "ポーカー")
+            if existing is not None:
+                await interaction.response.send_message(
+                    f"現在「{existing}」をプレイ中/募集中のため、同時に別のゲームには参加できないゾ。",
+                    ephemeral=True,
+                )
+                return
             if self.is_real_tadocoin:
                 ok, bal = self.bot.storage.try_spend_tadocoin(
                     self.guild_id, interaction.user.id, self.buy_in
                 )
                 if not ok:
+                    self.bot.release_game(interaction.user.id)
                     await interaction.response.send_message(
                         f"タドコインが足りないゾ！（必要: **{self.buy_in:,}** / 所持: **{bal:,}**）",
                         ephemeral=True,
@@ -767,6 +777,7 @@ class PokerLobbyView(discord.ui.View):
                 if self.is_real_tadocoin:
                     for uid in self.players:
                         self.bot.storage.add_tadocoin(self.guild_id, uid, self.buy_in)
+                self.bot.release_games(self.players)
                 self.stop()
                 embed = discord.Embed(
                     title="🃏 ポーカー募集解散",
@@ -777,6 +788,7 @@ class PokerLobbyView(discord.ui.View):
                 return
 
             self.players.remove(interaction.user.id)
+            self.bot.release_game(interaction.user.id)
             if self.is_real_tadocoin:
                 self.bot.storage.add_tadocoin(
                     self.guild_id, interaction.user.id, self.buy_in
@@ -845,6 +857,94 @@ class PokerLobbyView(discord.ui.View):
             if self.is_real_tadocoin:
                 for uid in self.players:
                     self.bot.storage.add_tadocoin(self.guild_id, uid, self.buy_in)
+            self.bot.release_games(self.players)
+
+
+class PokerModeSelectView(discord.ui.View):
+    """ポーカーの対戦モード（対人戦 / 練習Bot）選択 View。"""
+
+    def __init__(
+        self,
+        bot: YajuBot,
+        guild_id: int,
+        host_id: int,
+        buy_in: int,
+        small_blind: int,
+    ) -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.guild_id = guild_id
+        self.host_id = host_id
+        self.buy_in = buy_in
+        self.small_blind = small_blind
+
+    @discord.ui.button(label="対人戦（募集）", style=discord.ButtonStyle.primary)
+    async def pvp_btn(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if interaction.user.id != self.host_id:
+            await interaction.response.send_message(
+                "コマンドを実行した本人のみ選択できるゾ。", ephemeral=True
+            )
+            return
+        if self.buy_in < self.small_blind * 2:
+            await interaction.response.send_message(
+                f"参加費（{self.buy_in:,}）はビッグブラインド（{self.small_blind * 2:,}）以上にしてくれよな〜。",
+                ephemeral=True,
+            )
+            return
+        ok, bal = self.bot.storage.try_spend_tadocoin(
+            self.guild_id, self.host_id, self.buy_in
+        )
+        if not ok:
+            await interaction.response.send_message(
+                f"タドコインが足りないゾ！（必要: **{self.buy_in:,}** / 所持: **{bal:,}**）",
+                ephemeral=True,
+            )
+            return
+        self.stop()
+        lobby = PokerLobbyView(
+            self.bot,
+            self.guild_id,
+            self.host_id,
+            buy_in=self.buy_in,
+            small_blind=self.small_blind,
+        )
+        await interaction.response.edit_message(
+            embed=lobby.build_embed(), view=lobby
+        )
+
+    @discord.ui.button(label="1人練習（Bot相手・無料）", style=discord.ButtonStyle.success)
+    async def practice_btn(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if interaction.user.id != self.host_id:
+            await interaction.response.send_message(
+                "コマンドを実行した本人のみ選択できるゾ。", ephemeral=True
+            )
+            return
+        self.stop()
+        table = PokerTable(
+            [self.host_id, NPC_BOT_ID],
+            starting_chips=FREE_PRACTICE_CHIPS,
+            small_blind=10,
+        )
+        table.start_hand()
+        table_view = PokerTableView(
+            self.bot,
+            self.guild_id,
+            self.host_id,
+            table,
+            is_real_tadocoin=False,
+            is_practice=True,
+            board_message=interaction.message,
+        )
+        await interaction.response.edit_message(
+            embed=table_view.build_embed(), view=table_view
+        )
+
+    async def on_timeout(self) -> None:
+        self.bot.release_game(self.host_id)
 
 
 class PokerCog(commands.Cog):
@@ -855,10 +955,10 @@ class PokerCog(commands.Cog):
 
     @app_commands.command(
         name="poker",
-        description="タドコインを賭けてマルチプレイ・ポーカー（テキサスホールデム）を開始するゾ",
+        description="ポーカー（テキサスホールデム）を始めるゾ（対人戦 / 1人練習）",
     )
     @app_commands.describe(
-        buy_in="参加費（タドコイン。1以上）",
+        buy_in="対人戦の参加費（タドコイン。1以上）",
         small_blind="スモールブラインド額（ビッグブラインドはその2倍）",
     )
     @app_commands.guild_only()
@@ -875,66 +975,31 @@ class PokerCog(commands.Cog):
             )
             return
 
-        if buy_in < small_blind * 2:
+        existing = self.bot.try_acquire_game(interaction.user.id, "ポーカー")
+        if existing is not None:
             await interaction.response.send_message(
-                f"参加費（{buy_in:,}）はビッグブラインド（{small_blind * 2:,}）以上にしてくれよな〜。",
+                f"現在「{existing}」をプレイ中/募集中のため、同時に別のゲームは開始できないゾ。",
                 ephemeral=True,
             )
             return
 
-        ok, bal = self.bot.storage.try_spend_tadocoin(
-            guild.id, interaction.user.id, buy_in
-        )
-        if not ok:
-            await interaction.response.send_message(
-                f"タドコインが足りないゾ！（必要: **{buy_in:,}** / 所持: **{bal:,}**）",
-                ephemeral=True,
-            )
-            return
-
-        lobby = PokerLobbyView(
+        mode_view = PokerModeSelectView(
             self.bot,
             guild.id,
             interaction.user.id,
             buy_in=buy_in,
             small_blind=small_blind,
         )
-        await interaction.response.send_message(embed=lobby.build_embed(), view=lobby)
-
-    @app_commands.command(
-        name="poker_practice",
-        description="練習Bot相手に1人でポーカー（テキサスホールデム）を練習するゾ（無料）",
-    )
-    @app_commands.guild_only()
-    async def poker_practice_cmd(self, interaction: discord.Interaction) -> None:
-        guild = interaction.guild
-        if guild is None:
-            await interaction.response.send_message(
-                "サーバー内のチャンネルでのみ利用できるゾ。", ephemeral=True
-            )
-            return
-
-        table = PokerTable(
-            [interaction.user.id, NPC_BOT_ID],
-            starting_chips=FREE_PRACTICE_CHIPS,
-            small_blind=10,
+        embed = discord.Embed(
+            title="ポーカー（テキサスホールデム）",
+            description=(
+                "対戦モードを選択してください。\n"
+                f"・対人戦の参加費: **{buy_in:,}** タドコイン（SB: {small_blind:,} / BB: {small_blind * 2:,}）\n"
+                "・1人練習: 無料（タドコインの消費・付与はありません）"
+            ),
+            color=discord.Color.blurple(),
         )
-        table.start_hand()
-        table_view = PokerTableView(
-            self.bot,
-            guild.id,
-            interaction.user.id,
-            table,
-            is_real_tadocoin=False,
-            is_practice=True,
-        )
-        await interaction.response.send_message(
-            embed=table_view.build_embed(), view=table_view
-        )
-        try:
-            table_view._board_message = await interaction.original_response()
-        except (discord.NotFound, discord.HTTPException):
-            pass
+        await interaction.response.send_message(embed=embed, view=mode_view)
 
 
 async def setup(bot: YajuBot) -> None:

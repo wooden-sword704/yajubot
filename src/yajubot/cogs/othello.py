@@ -86,6 +86,17 @@ class OthelloBoardView(discord.ui.View):
         self._run_cpu_turns()
         self._rebuild_controls()
 
+    def stop(self) -> None:
+        self.bot.release_games([self.game.black_user_id, self.game.white_user_id])
+        super().stop()
+
+    async def on_timeout(self) -> None:
+        async with self.lock:
+            if not self.game.is_finished and not self.game.is_aborted:
+                self.game.is_aborted = True
+                self._settle_bets_if_needed()
+            self.stop()
+
     def _run_cpu_turns(self) -> None:
         if not self.is_practice or self.game.is_finished or self.game.is_aborted:
             return
@@ -367,11 +378,19 @@ class OthelloLobbyView(discord.ui.View):
                     "すでに満員（2人）だゾ。", ephemeral=True
                 )
                 return
+            existing = self.bot.try_acquire_game(interaction.user.id, "オセロ")
+            if existing is not None:
+                await interaction.response.send_message(
+                    f"現在「{existing}」をプレイ中/募集中のため、同時に別のゲームには参加できないゾ。",
+                    ephemeral=True,
+                )
+                return
             if self.bet > 0:
                 ok, bal = self.bot.storage.try_spend_tadocoin(
                     self.guild_id, interaction.user.id, self.bet
                 )
                 if not ok:
+                    self.bot.release_game(interaction.user.id)
                     await interaction.response.send_message(
                         f"タドコインが足りないゾ！（必要: **{self.bet:,}** / 所持: **{bal:,}**）",
                         ephemeral=True,
@@ -402,6 +421,7 @@ class OthelloLobbyView(discord.ui.View):
                 if self.bet > 0:
                     for uid in self.players:
                         self.bot.storage.add_tadocoin(self.guild_id, uid, self.bet)
+                self.bot.release_games(self.players)
                 self.stop()
                 embed = discord.Embed(
                     title="オセロ募集解散",
@@ -412,6 +432,7 @@ class OthelloLobbyView(discord.ui.View):
                 return
 
             self.players.remove(interaction.user.id)
+            self.bot.release_game(interaction.user.id)
             if self.bet > 0:
                 self.bot.storage.add_tadocoin(
                     self.guild_id, interaction.user.id, self.bet
@@ -419,6 +440,16 @@ class OthelloLobbyView(discord.ui.View):
             await interaction.response.edit_message(
                 embed=self.build_embed(), view=self
             )
+
+    async def on_timeout(self) -> None:
+        async with self.lock:
+            if self.is_closed:
+                return
+            self.is_closed = True
+            if self.bet > 0:
+                for uid in self.players:
+                    self.bot.storage.add_tadocoin(self.guild_id, uid, self.bet)
+            self.bot.release_games(self.players)
 
     @discord.ui.button(label="対局開始", style=discord.ButtonStyle.primary)
     async def start_button(
@@ -456,14 +487,83 @@ class OthelloLobbyView(discord.ui.View):
             )
 
 
-class OthelloAiDifficultyView(discord.ui.View):
-    """オセロ AI対戦の難易度選択 View。"""
+class OthelloModeSelectView(discord.ui.View):
+    """オセロの対戦モード（対人戦 / AI対戦）選択 View。"""
 
-    def __init__(self, bot: YajuBot, guild_id: int, host_id: int) -> None:
+    def __init__(
+        self, bot: YajuBot, guild_id: int, host_id: int, bet: int
+    ) -> None:
         super().__init__(timeout=120)
         self.bot = bot
         self.guild_id = guild_id
         self.host_id = host_id
+        self.bet = bet
+
+    @discord.ui.button(label="対人戦（募集）", style=discord.ButtonStyle.primary)
+    async def pvp_btn(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if interaction.user.id != self.host_id:
+            await interaction.response.send_message(
+                "コマンドを実行した本人のみ選択できるゾ。", ephemeral=True
+            )
+            return
+        if self.bet > 0:
+            ok, bal = self.bot.storage.try_spend_tadocoin(
+                self.guild_id, self.host_id, self.bet
+            )
+            if not ok:
+                await interaction.response.send_message(
+                    f"タドコインが足りないゾ！（必要: **{self.bet:,}** / 所持: **{bal:,}**）",
+                    ephemeral=True,
+                )
+                return
+        self.stop()
+        lobby = OthelloLobbyView(
+            self.bot, self.guild_id, self.host_id, bet=self.bet
+        )
+        await interaction.response.edit_message(
+            embed=lobby.build_embed(), view=lobby
+        )
+
+    @discord.ui.button(label="AI対戦", style=discord.ButtonStyle.success)
+    async def ai_btn(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if interaction.user.id != self.host_id:
+            await interaction.response.send_message(
+                "コマンドを実行した本人のみ選択できるゾ。", ephemeral=True
+            )
+            return
+        self.stop()
+        view = OthelloAiDifficultyView(
+            self.bot, self.guild_id, self.host_id, bet=self.bet
+        )
+        embed = discord.Embed(
+            title="オセロ（AI対戦）",
+            description=(
+                "難易度を選択してください。\n"
+                "※ AI対戦ではタドコインの消費・付与はありません。"
+            ),
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    async def on_timeout(self) -> None:
+        self.bot.release_game(self.host_id)
+
+
+class OthelloAiDifficultyView(discord.ui.View):
+    """オセロ AI対戦の難易度選択 View。"""
+
+    def __init__(
+        self, bot: YajuBot, guild_id: int, host_id: int, *, bet: int = 0
+    ) -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.guild_id = guild_id
+        self.host_id = host_id
+        self.bet = bet
 
     async def _start_ai(
         self, interaction: discord.Interaction, difficulty: str
@@ -506,6 +606,29 @@ class OthelloAiDifficultyView(discord.ui.View):
     ) -> None:
         await self._start_ai(interaction, "hard")
 
+    @discord.ui.button(label="戻る", style=discord.ButtonStyle.secondary)
+    async def back_btn(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if interaction.user.id != self.host_id:
+            await interaction.response.send_message(
+                "コマンドを実行した本人のみ選択できるゾ。", ephemeral=True
+            )
+            return
+        self.stop()
+        mode_view = OthelloModeSelectView(
+            self.bot, self.guild_id, self.host_id, self.bet
+        )
+        embed = discord.Embed(
+            title="オセロ",
+            description="対戦モードを選択してください。",
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.edit_message(embed=embed, view=mode_view)
+
+    async def on_timeout(self) -> None:
+        self.bot.release_game(self.host_id)
+
 
 class OthelloCog(commands.Cog):
     """8×8 オセロコマンドを提供する Cog。"""
@@ -515,9 +638,9 @@ class OthelloCog(commands.Cog):
 
     @app_commands.command(
         name="othello",
-        description="画像盤面＋ドロップダウン操作の8×8オセロ（対人戦）を始めるゾ",
+        description="画像盤面＋ドロップダウン操作の8×8オセロを始めるゾ（対人戦 / AI対戦）",
     )
-    @app_commands.describe(bet="賭けるタドコイン（0 で無料対戦）")
+    @app_commands.describe(bet="対人戦時に賭けるタドコイン（0 で無料対戦）")
     @app_commands.guild_only()
     async def othello_cmd(
         self,
@@ -531,43 +654,28 @@ class OthelloCog(commands.Cog):
             )
             return
 
-        if bet > 0:
-            ok, bal = self.bot.storage.try_spend_tadocoin(
-                guild.id, interaction.user.id, bet
-            )
-            if not ok:
-                await interaction.response.send_message(
-                    f"タドコインが足りないゾ！（必要: **{bet:,}** / 所持: **{bal:,}**）",
-                    ephemeral=True,
-                )
-                return
-
-        lobby = OthelloLobbyView(self.bot, guild.id, interaction.user.id, bet=bet)
-        await interaction.response.send_message(embed=lobby.build_embed(), view=lobby)
-
-    @app_commands.command(
-        name="othello_ai",
-        description="AI対戦の8×8オセロを始めるゾ（3段階の難易度）",
-    )
-    @app_commands.guild_only()
-    async def othello_ai_cmd(self, interaction: discord.Interaction) -> None:
-        guild = interaction.guild
-        if guild is None:
+        existing = self.bot.try_acquire_game(interaction.user.id, "オセロ")
+        if existing is not None:
             await interaction.response.send_message(
-                "サーバー内のチャンネルでのみ利用できるゾ。", ephemeral=True
+                f"現在「{existing}」をプレイ中/募集中のため、同時に別のゲームは開始できないゾ。",
+                ephemeral=True,
             )
             return
 
-        view = OthelloAiDifficultyView(self.bot, guild.id, interaction.user.id)
+        mode_view = OthelloModeSelectView(
+            self.bot, guild.id, interaction.user.id, bet=bet
+        )
+        bet_note = (
+            f"（対人戦の賭け金: **{bet:,}** タドコイン）"
+            if bet > 0
+            else "（対人戦: 無料）"
+        )
         embed = discord.Embed(
-            title="オセロ（AI対戦）",
-            description=(
-                "難易度を選択してください。\n"
-                "※ AI対戦ではタドコインの消費・付与はありません。"
-            ),
+            title="オセロ",
+            description=f"対戦モードを選択してください{bet_note}。",
             color=discord.Color.blurple(),
         )
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=mode_view)
 
 
 async def setup(bot: YajuBot) -> None:

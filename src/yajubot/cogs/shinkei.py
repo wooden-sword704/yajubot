@@ -315,10 +315,14 @@ class ShinkeiBoardView(discord.ui.View):
     """神経衰弱盤面 View。"""
 
     def __init__(
-        self, game: ShinkeiGame, board_message: discord.Message | None = None
+        self,
+        game: ShinkeiGame,
+        board_message: discord.Message | None = None,
+        bot: YajuBot | None = None,
     ) -> None:
         super().__init__(timeout=game.difficulty.timeout_seconds)
         self.game = game
+        self._bot = bot
         self._board_message: discord.Message | None = board_message
         self._deadline_unix: int = int(time.time() + game.difficulty.timeout_seconds)
         self._deadline_task: asyncio.Task[None] | None = None
@@ -335,6 +339,8 @@ class ShinkeiBoardView(discord.ui.View):
     def stop(self) -> None:
         if self._deadline_task is not None and not self._deadline_task.done():
             self._deadline_task.cancel()
+        if self._bot is not None:
+            self._bot.release_games(self.game.players)
         super().stop()
 
     async def _wait_for_deadline(self) -> None:
@@ -354,7 +360,7 @@ class ShinkeiBoardView(discord.ui.View):
             self.game.is_aborted = True
             self.game.is_busy = False
             self._rebuild_buttons()
-            super().stop()
+            self.stop()
             if self._board_message is not None:
                 try:
                     await self._board_message.edit(
@@ -734,10 +740,13 @@ class ShinkeiQuitConfirmView(discord.ui.View):
                     pass
 
         if outcome == "aborted":
+            self.board_view.stop()
             await interaction.response.edit_message(
                 content="ゲームを途中終了したゾ", view=None
             )
         else:
+            if hasattr(interaction.client, "release_game"):
+                interaction.client.release_game(interaction.user.id)
             await interaction.response.edit_message(
                 content="ゲームから離脱したゾ。この戦いは負けた判定になったゾ", view=None
             )
@@ -776,6 +785,8 @@ class ShinkeiLobbyLeaveConfirmView(discord.ui.View):
         if interaction.user.id == lv.host_id:
             lv.is_closed = True
             lv.stop()
+            if hasattr(interaction.client, "release_games"):
+                interaction.client.release_games(lv.players)
             closed_embed = discord.Embed(
                 title=f"🃏 神経衰弱 募集終了（{lv.difficulty.label}）",
                 description="ホストによりロビーが途中終了されました。",
@@ -792,6 +803,8 @@ class ShinkeiLobbyLeaveConfirmView(discord.ui.View):
             return
 
         lv.players.remove(interaction.user.id)
+        if hasattr(interaction.client, "release_game"):
+            interaction.client.release_game(interaction.user.id)
         if len(lv.players) < MAX_MULTIPLAYER_PLAYERS:
             lv.join_button.disabled = False
         if self.lobby_message is not None:
@@ -815,12 +828,22 @@ class ShinkeiLobbyLeaveConfirmView(discord.ui.View):
 class ShinkeiLobbyView(discord.ui.View):
     """マルチプレイ参加募集ロビー View。"""
 
-    def __init__(self, host_id: int, difficulty: DifficultySpec) -> None:
+    def __init__(
+        self,
+        host_id: int,
+        difficulty: DifficultySpec,
+        bot: YajuBot | None = None,
+    ) -> None:
         super().__init__(timeout=300)
         self.host_id = host_id
         self.difficulty = difficulty
+        self.bot = bot
         self.players: list[int] = [host_id]
         self.is_closed: bool = False
+
+    async def on_timeout(self) -> None:
+        if not self.is_closed and self.bot is not None:
+            self.bot.release_games(self.players)
 
     def build_embed(self) -> discord.Embed:
         member_list = "\n".join(f"• <@{uid}>" for uid in self.players)
@@ -851,6 +874,16 @@ class ShinkeiLobbyView(discord.ui.View):
                 ephemeral=True,
             )
             return
+        if hasattr(interaction.client, "try_acquire_game"):
+            existing = interaction.client.try_acquire_game(
+                interaction.user.id, "神経衰弱"
+            )
+            if existing is not None:
+                await interaction.response.send_message(
+                    f"現在「{existing}」をプレイ中/募集中のため、同時に別のゲームには参加できないゾ。",
+                    ephemeral=True,
+                )
+                return
         self.players.append(interaction.user.id)
         if len(self.players) >= MAX_MULTIPLAYER_PLAYERS:
             button.disabled = True
@@ -873,7 +906,11 @@ class ShinkeiLobbyView(discord.ui.View):
         except ValueError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
-        board = ShinkeiBoardView(game, board_message=interaction.message)
+        board = ShinkeiBoardView(
+            game,
+            board_message=interaction.message,
+            bot=interaction.client if isinstance(interaction.client, YajuBot) else None,
+        )
         self.is_closed = True
         self.stop()
         await interaction.response.edit_message(content=None, embed=board.build_embed(), view=board)
@@ -904,10 +941,17 @@ class ShinkeiLobbyView(discord.ui.View):
 class ShinkeiModeSelectView(discord.ui.View):
     """1人プレイ / マルチプレイ選択 View。"""
 
-    def __init__(self, host_id: int, difficulty: DifficultySpec) -> None:
+    def __init__(
+        self, host_id: int, difficulty: DifficultySpec, bot: YajuBot | None = None
+    ) -> None:
         super().__init__(timeout=120)
         self.host_id = host_id
         self.difficulty = difficulty
+        self.bot = bot
+
+    async def on_timeout(self) -> None:
+        if self.bot is not None:
+            self.bot.release_game(self.host_id)
 
     @discord.ui.button(label="1人プレイ", emoji="👤", style=discord.ButtonStyle.primary)
     async def solo_button(
@@ -927,7 +971,11 @@ class ShinkeiModeSelectView(discord.ui.View):
         except ValueError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
-        board = ShinkeiBoardView(game, board_message=interaction.message)
+        board = ShinkeiBoardView(
+            game,
+            board_message=interaction.message,
+            bot=interaction.client if isinstance(interaction.client, YajuBot) else None,
+        )
         self.stop()
         await interaction.response.edit_message(content=None, embed=board.build_embed(), view=board)
 
@@ -942,7 +990,11 @@ class ShinkeiModeSelectView(discord.ui.View):
                 "コマンドを実行した本人のみ選択できるゾ。", ephemeral=True
             )
             return
-        lobby = ShinkeiLobbyView(self.host_id, self.difficulty)
+        lobby = ShinkeiLobbyView(
+            self.host_id,
+            self.difficulty,
+            bot=interaction.client if isinstance(interaction.client, YajuBot) else None,
+        )
         self.stop()
         await interaction.response.edit_message(content=None, embed=lobby.build_embed(), view=lobby)
 
@@ -992,12 +1044,21 @@ class ShinkeiDifficultySelectView(discord.ui.View):
     """難易度選択 View。"""
 
     def __init__(
-        self, host_id: int, *, unlocked_super_ikisugi: bool = False
+        self,
+        host_id: int,
+        *,
+        unlocked_super_ikisugi: bool = False,
+        bot: YajuBot | None = None,
     ) -> None:
         super().__init__(timeout=120)
         self.host_id = host_id
+        self.bot = bot
         if not unlocked_super_ikisugi:
             self.remove_item(self.super_ikisugi_btn)
+
+    async def on_timeout(self) -> None:
+        if self.bot is not None:
+            self.bot.release_game(self.host_id)
 
     async def _choose(
         self, interaction: discord.Interaction, diff_key: str
@@ -1018,7 +1079,11 @@ class ShinkeiDifficultySelectView(discord.ui.View):
             )
             return
         self.stop()
-        mode_view = ShinkeiModeSelectView(self.host_id, diff)
+        mode_view = ShinkeiModeSelectView(
+            self.host_id,
+            diff,
+            bot=interaction.client if isinstance(interaction.client, YajuBot) else None,
+        )
         if diff.key == "ikisugi":
             note = IKISUGI_GIMMICK_NOTE
         elif diff.key == "super_ikisugi":
@@ -1088,11 +1153,19 @@ class ShinkeiCog(commands.Cog):
             )
             return
 
+        existing = self.bot.try_acquire_game(interaction.user.id, "神経衰弱")
+        if existing is not None:
+            await interaction.response.send_message(
+                f"現在「{existing}」をプレイ中/募集中のため、同時に別のゲームは開始できないゾ。",
+                ephemeral=True,
+            )
+            return
+
         unlocked = self.bot.storage.has_cleared_shinkei(
             guild.id, "ikisugi", interaction.user.id
         )
         view = ShinkeiDifficultySelectView(
-            interaction.user.id, unlocked_super_ikisugi=unlocked
+            interaction.user.id, unlocked_super_ikisugi=unlocked, bot=self.bot
         )
         await interaction.response.send_message(
             "🃏 **神経衰弱**\n難易度を選択してください、なんでもしますから（なんでもするとは言ってない）",

@@ -125,6 +125,27 @@ class YajuBot(commands.Bot):
         self.debug_next_slot_outcome: str | None = None
         self.debug_next_shinkei_result: str | None = None
         self.debug_restart_requested: bool = False
+        self.active_games: dict[int, str] = {}
+
+    def try_acquire_game(self, user_id: int, game_name: str) -> str | None:
+        """ユーザーが別ゲームを進行中でなければ登録して None を返す。進行中ならそのゲーム名を返す。"""
+        if user_id <= 0:
+            return None
+        existing = self.active_games.get(user_id)
+        if existing is not None:
+            return existing
+        self.active_games[user_id] = game_name
+        return None
+
+    def release_game(self, user_id: int) -> None:
+        """ユーザーのアクティブゲーム登録を解除する。"""
+        if user_id > 0:
+            self.active_games.pop(user_id, None)
+
+    def release_games(self, user_ids: list[int] | tuple[int, ...]) -> None:
+        """複数ユーザーのアクティブゲーム登録をまとめて解除する。"""
+        for uid in user_ids:
+            self.release_game(uid)
 
     async def close(self) -> None:
         try:
