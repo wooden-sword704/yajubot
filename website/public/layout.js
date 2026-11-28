@@ -13,14 +13,14 @@
       { href: 'index.html', label: 'ホーム', page: 'index.html' },
       { href: 'guide.html', label: 'しばきかた', page: 'guide.html' },
       // { href: isHome ? '#features' : 'index.html#features', label: 'できること', page: '' },
-      { href: 'terms.html', label: '利用規約', page: 'terms.html' },
+      //{ href: 'terms.html', label: '利用規約', page: 'terms.html' },
       { href: 'privacy.html', label: 'プライバシーポリシー', page: 'privacy.html' },
       { href: 'credits.html', label: 'クレジット', page: 'credits.html' },
     ];
 
     const footerItems = [
       { href: 'guide.html', label: 'しばきかた' },
-      { href: 'terms.html', label: '利用規約' },
+      //{ href: 'terms.html', label: '利用規約' },
       { href: 'privacy.html', label: 'プライバシーポリシー' },
       { href: 'credits.html', label: 'クレジット' },
     ];

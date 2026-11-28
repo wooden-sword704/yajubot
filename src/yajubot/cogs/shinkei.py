@@ -878,12 +878,12 @@ class ShinkeiLobbyView(discord.ui.View):
             existing = interaction.client.try_acquire_game(
                 interaction.user.id, "神経衰弱"
             )
-            if existing is not None:
+            """if existing is not None:
                 await interaction.response.send_message(
                     f"現在「{existing}」をプレイ中/募集中のため、同時に別のゲームには参加できないゾ。",
                     ephemeral=True,
                 )
-                return
+                return"""
         self.players.append(interaction.user.id)
         if len(self.players) >= MAX_MULTIPLAYER_PLAYERS:
             button.disabled = True
@@ -1154,12 +1154,12 @@ class ShinkeiCog(commands.Cog):
             return
 
         existing = self.bot.try_acquire_game(interaction.user.id, "神経衰弱")
-        if existing is not None:
+        """if existing is not None:
             await interaction.response.send_message(
                 f"現在「{existing}」をプレイ中/募集中のため、同時に別のゲームは開始できないゾ。",
                 ephemeral=True,
             )
-            return
+            return"""
 
         unlocked = self.bot.storage.has_cleared_shinkei(
             guild.id, "ikisugi", interaction.user.id
