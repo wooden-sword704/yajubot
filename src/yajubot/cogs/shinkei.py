@@ -348,10 +348,10 @@ class ShinkeiBoardView(discord.ui.View):
             self._bot.release_games(self.game.players)
         super().stop()
 
-    async def _interrupt_user(self, user_id: int) -> None:
+    async def _interrupt_user(self, user_id: int) -> discord.Message | None:
         async with self.game.lock:
             if self.game.is_finished or self.game.is_aborted:
-                return
+                return self._board_message
             outcome = self.game.forfeit_player(user_id)
             if outcome in ("not_in_game", "aborted"):
                 self._rebuild_buttons()
@@ -368,6 +368,7 @@ class ShinkeiBoardView(discord.ui.View):
                     )
                 except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
                     pass
+            return self._board_message
 
     async def _wait_for_deadline(self) -> None:
         try:
@@ -890,9 +891,9 @@ class ShinkeiLobbyView(discord.ui.View):
         )
         return embed
 
-    async def _interrupt_user(self, user_id: int) -> None:
+    async def _interrupt_user(self, user_id: int) -> discord.Message | None:
         if self.is_closed or user_id not in self.players:
-            return
+            return self._lobby_message
         if user_id == self.host_id:
             self.is_closed = True
             self.stop()
@@ -910,7 +911,7 @@ class ShinkeiLobbyView(discord.ui.View):
                     )
                 except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
                     pass
-            return
+            return self._lobby_message
 
         self.players.remove(user_id)
         if self.bot is not None:
@@ -922,6 +923,7 @@ class ShinkeiLobbyView(discord.ui.View):
                 await self._lobby_message.edit(embed=self.build_embed(), view=self)
             except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
                 pass
+        return self._lobby_message
 
     @discord.ui.button(label="参加する", emoji="✋", style=discord.ButtonStyle.primary)
     async def join_button(
@@ -1226,7 +1228,8 @@ class ShinkeiInterruptConfirmView(discord.ui.View):
             )
             return
 
-        if not await self.bot.interrupt_game(self.user_id):
+        interrupted, target_message = await self.bot.interrupt_game(self.user_id)
+        if not interrupted:
             await interaction.response.edit_message(
                 content="現在のゲームはすでに終了しているか、中断できません。",
                 view=None,
@@ -1247,12 +1250,24 @@ class ShinkeiInterruptConfirmView(discord.ui.View):
         view = ShinkeiDifficultySelectView(
             self.user_id, unlocked_super_ikisugi=unlocked, bot=self.bot
         )
-        await interaction.response.defer()
-        await interaction.followup.send(
-            "現在のゲームから退出しました。賭け金・チップは返金されません。\n🃏 **神経衰弱**\n難易度を選択してください。",
-            view=view,
-            ephemeral=False,
+        content = (
+            "現在のゲームから退出しました。賭け金・チップは返金されません。\n"
+            "🃏 **神経衰弱**\n難易度を選択してください。"
         )
+        await interaction.response.defer()
+        channel = interaction.channel
+        if target_message is not None and isinstance(channel, discord.abc.Messageable):
+            try:
+                await channel.send(
+                    content,
+                    view=view,
+                    reference=target_message,
+                    mention_author=False,
+                )
+            except (discord.HTTPException, aiohttp.ClientError):
+                await interaction.followup.send(content, view=view, ephemeral=False)
+        else:
+            await interaction.followup.send(content, view=view, ephemeral=False)
         await interaction.edit_original_response(
             content="新しい神経衰弱の選択画面をチャンネルに投稿しました。",
             view=None,

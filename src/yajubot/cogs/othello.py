@@ -102,12 +102,12 @@ class OthelloBoardView(discord.ui.View):
                 self._settle_bets_if_needed()
             self.stop()
 
-    async def _interrupt_user(self, user_id: int) -> None:
+    async def _interrupt_user(self, user_id: int) -> discord.Message | None:
         async with self.lock:
             if self.game.is_finished or self.game.is_aborted:
-                return
+                return self._board_message
             if self.game.color_of(user_id) is None:
-                return
+                return self._board_message
             self.game.is_aborted = True
             self.game.aborted_by = user_id
             self.last_note = f"<@{user_id}> が別のゲームを始めるため投了しました。賭け金は返金されません。"
@@ -121,6 +121,7 @@ class OthelloBoardView(discord.ui.View):
                     )
                 except (discord.NotFound, discord.HTTPException):
                     pass
+            return self._board_message
 
     def _run_cpu_turns(self) -> None:
         if not self.is_practice or self.game.is_finished or self.game.is_aborted:
@@ -388,10 +389,10 @@ class OthelloLobbyView(discord.ui.View):
         )
         return embed
 
-    async def _interrupt_user(self, user_id: int) -> None:
+    async def _interrupt_user(self, user_id: int) -> discord.Message | None:
         async with self.lock:
             if self.is_closed or user_id not in self.players:
-                return
+                return self._lobby_message
             if user_id == self.host_id:
                 self.is_closed = True
                 self.bot.release_games(self.players)
@@ -406,7 +407,7 @@ class OthelloLobbyView(discord.ui.View):
                         await self._lobby_message.edit(embed=embed, view=None)
                     except (discord.NotFound, discord.HTTPException):
                         pass
-                return
+                return self._lobby_message
 
             self.players.remove(user_id)
             self.bot.release_game(user_id)
@@ -415,6 +416,7 @@ class OthelloLobbyView(discord.ui.View):
                     await self._lobby_message.edit(embed=self.build_embed(), view=self)
                 except (discord.NotFound, discord.HTTPException):
                     pass
+            return self._lobby_message
 
     @discord.ui.button(label="参加する", style=discord.ButtonStyle.success)
     async def join_button(

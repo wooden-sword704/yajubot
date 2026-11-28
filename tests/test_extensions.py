@@ -45,12 +45,17 @@ class BotSetupAndGeneralHelpersTest(unittest.IsolatedAsyncioTestCase):
     async def test_interrupt_game_runs_registered_callback_once(self) -> None:
         bot = YajuBot(BotConfig(token="dummy-token"))
         callback = AsyncMock()
+        callback.return_value = None
         try:
             self.assertIsNone(bot.try_acquire_game(123, "神経衰弱"))
             bot.register_game_interrupt(123, callback)
 
-            self.assertTrue(await bot.interrupt_game(123))
-            self.assertFalse(await bot.interrupt_game(123))
+            interrupted, message = await bot.interrupt_game(123)
+            self.assertTrue(interrupted)
+            self.assertIsNone(message)
+            interrupted, message = await bot.interrupt_game(123)
+            self.assertFalse(interrupted)
+            self.assertIsNone(message)
             callback.assert_awaited_once()
             self.assertNotIn(123, bot.active_games)
         finally:

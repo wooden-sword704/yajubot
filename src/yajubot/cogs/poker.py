@@ -176,10 +176,10 @@ class PokerTableView(discord.ui.View):
         self.bot.release_games([p.user_id for p in self.table.players])
         super().stop()
 
-    async def _interrupt_user(self, user_id: int) -> None:
+    async def _interrupt_user(self, user_id: int) -> discord.Message | None:
         async with self.lock:
             if self.is_closed or self.table.get_player(user_id) is None:
-                return
+                return self._board_message
             self.is_closed = True
             self.table.last_action_text = (
                 f"<@{user_id}> が別のゲームを始めるためテーブルを中断しました。"
@@ -194,6 +194,7 @@ class PokerTableView(discord.ui.View):
                     )
                 except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
                     pass
+            return self._board_message
 
     def _cancel_turn_timer(self) -> None:
         current = asyncio.current_task()
@@ -741,10 +742,10 @@ class PokerLobbyView(discord.ui.View):
         )
         return embed
 
-    async def _interrupt_user(self, user_id: int) -> None:
+    async def _interrupt_user(self, user_id: int) -> discord.Message | None:
         async with self.lock:
             if self.is_closed or user_id not in self.players:
-                return
+                return self._lobby_message
             if user_id == self.host_id:
                 self.is_closed = True
                 self.bot.release_games(self.players)
@@ -759,7 +760,7 @@ class PokerLobbyView(discord.ui.View):
                         await self._lobby_message.edit(embed=embed, view=None)
                     except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
                         pass
-                return
+                return self._lobby_message
 
             self.players.remove(user_id)
             self.bot.release_game(user_id)
@@ -768,6 +769,7 @@ class PokerLobbyView(discord.ui.View):
                     await self._lobby_message.edit(embed=self.build_embed(), view=self)
                 except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
                     pass
+            return self._lobby_message
 
     @discord.ui.button(label="参加する", emoji="✋", style=discord.ButtonStyle.success)
     async def join_button(

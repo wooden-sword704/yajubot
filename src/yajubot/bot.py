@@ -127,7 +127,9 @@ class YajuBot(commands.Bot):
         self.debug_next_shinkei_result: str | None = None
         self.debug_restart_requested: bool = False
         self.active_games: dict[int, str] = {}
-        self.active_game_interrupts: dict[int, Callable[[], Awaitable[None]]] = {}
+        self.active_game_interrupts: dict[
+            int, Callable[[], Awaitable[discord.Message | None]]
+        ] = {}
 
     def try_acquire_game(self, user_id: int, game_name: str) -> str | None:
         """ユーザーが別ゲームを進行中でなければ登録して None を返す。進行中ならそのゲーム名を返す。"""
@@ -146,22 +148,26 @@ class YajuBot(commands.Bot):
             self.active_game_interrupts.pop(user_id, None)
 
     def register_game_interrupt(
-        self, user_id: int, callback: Callable[[], Awaitable[None]]
+        self,
+        user_id: int,
+        callback: Callable[[], Awaitable[discord.Message | None]],
     ) -> None:
         """ユーザーの現在のゲームから退出する処理を登録する。"""
         if user_id > 0 and user_id in self.active_games:
             self.active_game_interrupts[user_id] = callback
 
-    async def interrupt_game(self, user_id: int) -> bool:
-        """登録済みの退出処理を実行し、ゲーム予約を解除する。"""
+    async def interrupt_game(
+        self, user_id: int
+    ) -> tuple[bool, discord.Message | None]:
+        """登録済みの退出処理を実行し、中断成否と元メッセージを返す。"""
         callback = self.active_game_interrupts.pop(user_id, None)
         if callback is None:
-            return False
+            return False, None
         try:
-            await callback()
+            message = await callback()
         finally:
             self.release_game(user_id)
-        return True
+        return True, message
 
     def release_games(self, user_ids: list[int] | tuple[int, ...]) -> None:
         """複数ユーザーのアクティブゲーム登録をまとめて解除する。"""
