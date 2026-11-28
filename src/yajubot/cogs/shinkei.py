@@ -340,12 +340,12 @@ class ShinkeiBoardView(discord.ui.View):
     async def _wait_for_deadline(self) -> None:
         try:
             await asyncio.sleep(self.game.difficulty.timeout_seconds)
-            await self._expire_game("⏰ **制限時間切れによりゲームが終了しました。**")
+            await self._expire_game("**時間制限でゲームが終わっちゃっ...たぁ！**\n「みんな、時間制限なんかやめよう！馬鹿らしいよ！」\n「おい！みんな見てみろよ！ラブアンドピース！（パッチギ）」\n-# 「アーイク、アァ、アァ、アァ…」\n## 「終わり！閉廷！以上！皆解散！」")
         except asyncio.CancelledError:
             pass
 
     async def on_timeout(self) -> None:
-        await self._expire_game("⏰ **時間切れによりゲームが終了しました。**")
+        await self._expire_game("**時間制限でゲームが終わっちゃっ...たぁ！**\n「みんな、時間制限なんかやめよう！馬鹿らしいよ！」\n「おい！みんな見てみろよ！ラブアンドピース！（パッチギ）」\n-# 「アーイク、アァ、アァ、アァ…」\n## 「終わり！閉廷！以上！皆解散！」")
 
     async def _expire_game(self, reason: str) -> None:
         async with self.game.lock:
