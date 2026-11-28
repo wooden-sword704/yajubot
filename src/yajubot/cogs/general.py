@@ -192,8 +192,8 @@ class GeneralCog(commands.Cog):
         if reward is None:
             return
         text = CHINPOKO_DANCE_TEXT
-        if reward > 0:
-            text += f"\n（{reason}ため **+{reward:,}** タドコイン入手！）"
+        # if reward > 0:
+        #    text += f"\n（{reason}ため **+{reward:,}** タドコイン入手！）"
         await interaction.response.send_message(text)
 
     @app_commands.command(name="ikisugi", description="まくらが　でかすぎる　よかんがする")
