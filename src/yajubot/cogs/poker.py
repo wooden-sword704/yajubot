@@ -133,6 +133,11 @@ class PokerTableView(discord.ui.View):
         self._run_npc_turns()
         self._build_controls()
         self._restart_turn_timer()
+        for player in table.players:
+            self.bot.register_game_interrupt(
+                player.user_id,
+                lambda uid=player.user_id: self._interrupt_user(uid),
+            )
 
     def _run_npc_turns(self) -> None:
         """練習モード時、手番が NPC_BOT_ID の間自動でアクションを進める。"""
@@ -170,6 +175,25 @@ class PokerTableView(discord.ui.View):
         self._cancel_turn_timer()
         self.bot.release_games([p.user_id for p in self.table.players])
         super().stop()
+
+    async def _interrupt_user(self, user_id: int) -> None:
+        async with self.lock:
+            if self.is_closed or self.table.get_player(user_id) is None:
+                return
+            self.is_closed = True
+            self.table.last_action_text = (
+                f"<@{user_id}> が別のゲームを始めるためテーブルを中断しました。"
+                "残チップ・賭け金は返金されません。"
+            )
+            self._build_controls()
+            self.stop()
+            if self._board_message is not None:
+                try:
+                    await self._board_message.edit(
+                        embed=self.build_embed(), view=None
+                    )
+                except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
+                    pass
 
     def _cancel_turn_timer(self) -> None:
         current = asyncio.current_task()
@@ -677,6 +701,10 @@ class PokerLobbyView(discord.ui.View):
         self.players: list[int] = [host_id]
         self.lock = asyncio.Lock()
         self.is_closed = False
+        self._lobby_message: discord.Message | None = None
+        self.bot.register_game_interrupt(
+            host_id, lambda: self._interrupt_user(host_id)
+        )
 
     @property
     def is_real_tadocoin(self) -> bool:
@@ -713,11 +741,40 @@ class PokerLobbyView(discord.ui.View):
         )
         return embed
 
+    async def _interrupt_user(self, user_id: int) -> None:
+        async with self.lock:
+            if self.is_closed or user_id not in self.players:
+                return
+            if user_id == self.host_id:
+                self.is_closed = True
+                self.bot.release_games(self.players)
+                self.stop()
+                embed = discord.Embed(
+                    title="ポーカー募集終了",
+                    description="ホストが別のゲームを始めるため募集を終了しました。参加費・チップは返金されません。",
+                    color=discord.Color.dark_grey(),
+                )
+                if self._lobby_message is not None:
+                    try:
+                        await self._lobby_message.edit(embed=embed, view=None)
+                    except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
+                        pass
+                return
+
+            self.players.remove(user_id)
+            self.bot.release_game(user_id)
+            if self._lobby_message is not None:
+                try:
+                    await self._lobby_message.edit(embed=self.build_embed(), view=self)
+                except (discord.NotFound, discord.HTTPException, aiohttp.ClientError):
+                    pass
+
     @discord.ui.button(label="参加する", emoji="✋", style=discord.ButtonStyle.success)
     async def join_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         async with self.lock:
+            self._lobby_message = interaction.message
             if self.is_closed:
                 await interaction.response.send_message(
                     "このロビーはすでに終了しているゾ。", ephemeral=True
@@ -752,6 +809,10 @@ class PokerLobbyView(discord.ui.View):
                     )
                     return
             self.players.append(interaction.user.id)
+            self.bot.register_game_interrupt(
+                interaction.user.id,
+                lambda uid=interaction.user.id: self._interrupt_user(uid),
+            )
             await interaction.response.edit_message(
                 embed=self.build_embed(), view=self
             )
@@ -761,6 +822,7 @@ class PokerLobbyView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         async with self.lock:
+            self._lobby_message = interaction.message
             if self.is_closed:
                 await interaction.response.send_message(
                     "このロビーはすでに終了しているゾ。", ephemeral=True
@@ -802,6 +864,7 @@ class PokerLobbyView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         async with self.lock:
+            self._lobby_message = interaction.message
             if self.is_closed:
                 await interaction.response.send_message(
                     "このロビーはすでに開始・終了しているゾ。", ephemeral=True
@@ -910,6 +973,7 @@ class PokerModeSelectView(discord.ui.View):
             buy_in=self.buy_in,
             small_blind=self.small_blind,
         )
+        lobby._lobby_message = interaction.message
         await interaction.response.edit_message(
             embed=lobby.build_embed(), view=lobby
         )

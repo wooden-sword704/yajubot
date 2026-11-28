@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import pkgutil
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -126,6 +127,7 @@ class YajuBot(commands.Bot):
         self.debug_next_shinkei_result: str | None = None
         self.debug_restart_requested: bool = False
         self.active_games: dict[int, str] = {}
+        self.active_game_interrupts: dict[int, Callable[[], Awaitable[None]]] = {}
 
     def try_acquire_game(self, user_id: int, game_name: str) -> str | None:
         """ユーザーが別ゲームを進行中でなければ登録して None を返す。進行中ならそのゲーム名を返す。"""
@@ -141,6 +143,25 @@ class YajuBot(commands.Bot):
         """ユーザーのアクティブゲーム登録を解除する。"""
         if user_id > 0:
             self.active_games.pop(user_id, None)
+            self.active_game_interrupts.pop(user_id, None)
+
+    def register_game_interrupt(
+        self, user_id: int, callback: Callable[[], Awaitable[None]]
+    ) -> None:
+        """ユーザーの現在のゲームから退出する処理を登録する。"""
+        if user_id > 0 and user_id in self.active_games:
+            self.active_game_interrupts[user_id] = callback
+
+    async def interrupt_game(self, user_id: int) -> bool:
+        """登録済みの退出処理を実行し、ゲーム予約を解除する。"""
+        callback = self.active_game_interrupts.pop(user_id, None)
+        if callback is None:
+            return False
+        try:
+            await callback()
+        finally:
+            self.release_game(user_id)
+        return True
 
     def release_games(self, user_ids: list[int] | tuple[int, ...]) -> None:
         """複数ユーザーのアクティブゲーム登録をまとめて解除する。"""

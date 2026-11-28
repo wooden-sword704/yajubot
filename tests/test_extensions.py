@@ -42,6 +42,20 @@ class DiscoverExtensionsTest(unittest.TestCase):
 
 
 class BotSetupAndGeneralHelpersTest(unittest.IsolatedAsyncioTestCase):
+    async def test_interrupt_game_runs_registered_callback_once(self) -> None:
+        bot = YajuBot(BotConfig(token="dummy-token"))
+        callback = AsyncMock()
+        try:
+            self.assertIsNone(bot.try_acquire_game(123, "神経衰弱"))
+            bot.register_game_interrupt(123, callback)
+
+            self.assertTrue(await bot.interrupt_game(123))
+            self.assertFalse(await bot.interrupt_game(123))
+            callback.assert_awaited_once()
+            self.assertNotIn(123, bot.active_games)
+        finally:
+            await bot.close()
+
     async def test_setup_hook_loads_extensions_and_syncs_commands(self) -> None:
         config = BotConfig(token="dummy-token", guild_id=123456, log_level="INFO")
         bot = YajuBot(config)

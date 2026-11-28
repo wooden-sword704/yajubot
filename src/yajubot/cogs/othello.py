@@ -82,9 +82,14 @@ class OthelloBoardView(discord.ui.View):
         self.lock = asyncio.Lock()
         self.last_note: str = "置きたいマスを下のドロップダウンから選んでくれよな〜"
         self._payout_done = False
+        self._board_message: discord.Message | None = None
 
         self._run_cpu_turns()
         self._rebuild_controls()
+        for user_id in (game.black_user_id, game.white_user_id):
+            self.bot.register_game_interrupt(
+                user_id, lambda uid=user_id: self._interrupt_user(uid)
+            )
 
     def stop(self) -> None:
         self.bot.release_games([self.game.black_user_id, self.game.white_user_id])
@@ -96,6 +101,26 @@ class OthelloBoardView(discord.ui.View):
                 self.game.is_aborted = True
                 self._settle_bets_if_needed()
             self.stop()
+
+    async def _interrupt_user(self, user_id: int) -> None:
+        async with self.lock:
+            if self.game.is_finished or self.game.is_aborted:
+                return
+            if self.game.color_of(user_id) is None:
+                return
+            self.game.is_aborted = True
+            self.game.aborted_by = user_id
+            self.last_note = f"<@{user_id}> が別のゲームを始めるため投了しました。賭け金は返金されません。"
+            self._rebuild_controls()
+            embed, file = self.build_embed_and_file()
+            self.stop()
+            if self._board_message is not None:
+                try:
+                    await self._board_message.edit(
+                        embed=embed, attachments=[file], view=None
+                    )
+                except (discord.NotFound, discord.HTTPException):
+                    pass
 
     def _run_cpu_turns(self) -> None:
         if not self.is_practice or self.game.is_finished or self.game.is_aborted:
@@ -268,6 +293,7 @@ class OthelloBoardView(discord.ui.View):
         self, interaction: discord.Interaction, coord_str: str
     ) -> None:
         async with self.lock:
+            self._board_message = interaction.message
             if self.game.is_finished or self.game.is_aborted:
                 await interaction.response.send_message(
                     "この対局はすでに終了しているゾ。", ephemeral=True
@@ -338,6 +364,10 @@ class OthelloLobbyView(discord.ui.View):
         self.players: list[int] = [host_id]
         self.lock = asyncio.Lock()
         self.is_closed = False
+        self._lobby_message: discord.Message | None = None
+        self.bot.register_game_interrupt(
+            host_id, lambda: self._interrupt_user(host_id)
+        )
 
     def build_embed(self) -> discord.Embed:
         bet_text = f"**{self.bet:,}** タドコイン" if self.bet > 0 else "無料（賭けなし）"
@@ -358,11 +388,40 @@ class OthelloLobbyView(discord.ui.View):
         )
         return embed
 
+    async def _interrupt_user(self, user_id: int) -> None:
+        async with self.lock:
+            if self.is_closed or user_id not in self.players:
+                return
+            if user_id == self.host_id:
+                self.is_closed = True
+                self.bot.release_games(self.players)
+                self.stop()
+                embed = discord.Embed(
+                    title="オセロ募集終了",
+                    description="ホストが別のゲームを始めるため募集を終了しました。参加費・賭け金は返金されません。",
+                    color=discord.Color.dark_grey(),
+                )
+                if self._lobby_message is not None:
+                    try:
+                        await self._lobby_message.edit(embed=embed, view=None)
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
+                return
+
+            self.players.remove(user_id)
+            self.bot.release_game(user_id)
+            if self._lobby_message is not None:
+                try:
+                    await self._lobby_message.edit(embed=self.build_embed(), view=self)
+                except (discord.NotFound, discord.HTTPException):
+                    pass
+
     @discord.ui.button(label="参加する", style=discord.ButtonStyle.success)
     async def join_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         async with self.lock:
+            self._lobby_message = interaction.message
             if self.is_closed:
                 await interaction.response.send_message(
                     "このロビーはすでに終了しているゾ。", ephemeral=True
@@ -397,6 +456,10 @@ class OthelloLobbyView(discord.ui.View):
                     )
                     return
             self.players.append(interaction.user.id)
+            self.bot.register_game_interrupt(
+                interaction.user.id,
+                lambda uid=interaction.user.id: self._interrupt_user(uid),
+            )
             await interaction.response.edit_message(
                 embed=self.build_embed(), view=self
             )
@@ -406,6 +469,7 @@ class OthelloLobbyView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         async with self.lock:
+            self._lobby_message = interaction.message
             if self.is_closed:
                 await interaction.response.send_message(
                     "このロビーはすでに終了しているゾ。", ephemeral=True
@@ -456,6 +520,7 @@ class OthelloLobbyView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         async with self.lock:
+            self._lobby_message = interaction.message
             if self.is_closed:
                 await interaction.response.send_message(
                     "このロビーはすでに開始・終了しているゾ。", ephemeral=True
@@ -481,6 +546,7 @@ class OthelloLobbyView(discord.ui.View):
             board_view = OthelloBoardView(
                 self.bot, self.guild_id, game, bet=self.bet, is_practice=False
             )
+            board_view._board_message = interaction.message
             embed, file = board_view.build_embed_and_file()
             await interaction.response.edit_message(
                 embed=embed, attachments=[file], view=board_view
@@ -522,6 +588,7 @@ class OthelloModeSelectView(discord.ui.View):
         lobby = OthelloLobbyView(
             self.bot, self.guild_id, self.host_id, bet=self.bet
         )
+        lobby._lobby_message = interaction.message
         await interaction.response.edit_message(
             embed=lobby.build_embed(), view=lobby
         )
@@ -583,6 +650,7 @@ class OthelloAiDifficultyView(discord.ui.View):
             is_practice=True,
             ai_difficulty=difficulty,
         )
+        board_view._board_message = interaction.message
         embed, file = board_view.build_embed_and_file()
         await interaction.response.edit_message(
             content=None, embed=embed, attachments=[file], view=board_view
