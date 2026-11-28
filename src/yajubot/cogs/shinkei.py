@@ -1247,9 +1247,15 @@ class ShinkeiInterruptConfirmView(discord.ui.View):
         view = ShinkeiDifficultySelectView(
             self.user_id, unlocked_super_ikisugi=unlocked, bot=self.bot
         )
-        await interaction.response.edit_message(
-            content="現在のゲームから退出しました。賭け金・チップは返金されません。\n🃏 **神経衰弱**\n難易度を選択してください。",
+        await interaction.response.defer()
+        await interaction.followup.send(
+            "現在のゲームから退出しました。賭け金・チップは返金されません。\n🃏 **神経衰弱**\n難易度を選択してください。",
             view=view,
+            ephemeral=False,
+        )
+        await interaction.edit_original_response(
+            content="新しい神経衰弱の選択画面をチャンネルに投稿しました。",
+            view=None,
         )
 
     @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)

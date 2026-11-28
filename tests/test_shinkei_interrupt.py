@@ -47,8 +47,14 @@ class ShinkeiInterruptFlowTest(unittest.IsolatedAsyncioTestCase):
 
             callback.assert_awaited_once()
             self.assertEqual(bot.active_games[42], "神経衰弱")
-            edited = confirm_interaction.response.edit_message.call_args.kwargs
-            self.assertIsInstance(edited["view"], ShinkeiDifficultySelectView)
+            confirm_interaction.followup.send.assert_awaited_once()
+            posted = confirm_interaction.followup.send.call_args.kwargs
+            self.assertFalse(posted["ephemeral"])
+            self.assertIsInstance(posted["view"], ShinkeiDifficultySelectView)
+            confirm_interaction.edit_original_response.assert_awaited_once_with(
+                content="新しい神経衰弱の選択画面をチャンネルに投稿しました。",
+                view=None,
+            )
         finally:
             await bot.close()
 
@@ -62,4 +68,8 @@ class ShinkeiInterruptFlowTest(unittest.IsolatedAsyncioTestCase):
         interaction.response = MagicMock()
         interaction.response.send_message = AsyncMock()
         interaction.response.edit_message = AsyncMock()
+        interaction.response.defer = AsyncMock()
+        interaction.followup = MagicMock()
+        interaction.followup.send = AsyncMock()
+        interaction.edit_original_response = AsyncMock()
         return interaction
